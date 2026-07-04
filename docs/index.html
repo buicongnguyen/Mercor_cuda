@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Study hub for the Mercor GPU kernel optimization assessment: profiler-guided optimization, CUDA/HIP, memory hierarchy, and C++17.">
+  <title>GPU Kernel Optimization Study Hub</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GPU kernel optimization study hub</p>
+      <h1>Mercor Assessment Prep</h1>
+    </div>
+    <nav aria-label="Site navigation">
+      <a href="#summary">Summary</a>
+      <a href="#documents">Documents</a>
+      <a href="gpu-kernel-skills.html">Skills &amp; MCQ</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="summary" class="section">
+      <div class="intro">
+        <h2>Study Goal</h2>
+        <p>
+          Revision material for the Mercor GPU kernel optimization expert assessment. The role is about
+          improving kernel performance using <strong>profiler-guided analysis</strong> — reading metrics such as
+          L2 cache hit rate, L2 throughput, occupancy, and warp-stall reasons, deciding what they mean, and
+          knowing when a metric is <em>not</em> useful. The material pairs definitions and core-concept notes
+          with a bank of multiple-choice practice questions and explanations.
+        </p>
+      </div>
+
+      <div class="quick-grid">
+        <article class="mini-card">
+          <span class="status good">Execution</span>
+          <h3>SIMT Architecture</h3>
+          <p>SMs, warps, blocks, grids, warp schedulers, divergence, occupancy limiters, and latency hiding — the machine model every optimization reasons against.</p>
+        </article>
+        <article class="mini-card">
+          <span class="status good">Memory</span>
+          <h3>Memory Hierarchy</h3>
+          <p>Registers → shared → L1 → L2 → DRAM, coalescing and sectors, bank conflicts, vectorized loads, async copy, and read-only paths.</p>
+        </article>
+        <article class="mini-card">
+          <span class="status good">Profiling</span>
+          <h3>Nsight Compute Metrics</h3>
+          <p>Speed-of-light, achieved vs theoretical occupancy, L2 hit rate and throughput, sectors per request, warp-stall reasons, roofline — and the traps in each.</p>
+        </article>
+        <article class="mini-card">
+          <span class="status good">Techniques</span>
+          <h3>Optimization Playbook</h3>
+          <p>Tiling, fusion, ILP and unrolling, grid-stride loops, warp shuffles, tensor cores, inline PTX, CUB/Thrust/libcu++, streams and graphs.</p>
+        </article>
+        <article class="mini-card">
+          <span class="status good">Language</span>
+          <h3>C++17 &amp; Portability</h3>
+          <p>C++17 features that matter in kernel code, plus CUDA ↔ HIP ↔ compute-shader mapping (Slang/HLSL/GLSL) and Blackwell-generation notes.</p>
+        </article>
+        <article class="mini-card">
+          <span class="status warning">Practice format</span>
+          <h3>MCQ Drills</h3>
+          <p>60 questions with explanations, per-section and overall scores, a show-all-explanations toggle, and a reshuffling retry button. Works offline.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="documents" class="section">
+      <h2>Document Library</h2>
+      <p class="section-note">
+        All pages are plain HTML/CSS/JS with no dependencies, served from the <code>docs</code> folder.
+      </p>
+
+      <div class="doc-grid">
+        <a class="doc-link featured" href="gpu-kernel-skills.html">
+          <strong>GPU Kernel Optimization Revision and MCQ Practice</strong>
+          <span>Definitions, core-concept cards, ASCII diagrams, a profiler-metric decision guide, further-reading links, and 60 practice questions across six sections.</span>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Last updated: 2026-07-04. Styles shared with the Isaac Sim study hub.</p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,1278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Revision notes and multiple-choice practice for GPU kernel optimization: SIMT architecture, memory hierarchy, Nsight Compute profiler metrics, optimization techniques, C++17, and CUDA/HIP/shader portability.">
+  <title>GPU Kernel Optimization Revision and MCQ Practice</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .sub { margin-top: 24px; }
+    .term-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px; }
+    .term-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:14px; }
+    .term-card h3 { margin-bottom:6px; color:var(--accent-strong); }
+    .term-card p { color:var(--muted); margin-bottom:0; }
+    .def-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:0 22px; margin:0; padding:8px 18px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .def-list > div { padding:9px 0; border-bottom:1px solid var(--line); }
+    .def-list dt { font-weight:700; color:var(--accent-strong); }
+    .def-list dd { margin:2px 0 0; color:var(--muted); }
+    .diagram { margin:14px 0 0; padding:14px 16px; overflow-x:auto; background:var(--panel); border:1px solid var(--line); border-radius:8px; font-family:Consolas,Menlo,monospace; font-size:13px; line-height:1.45; color:var(--text); }
+    .diagram-title { margin:16px 0 0; font-size:13px; font-weight:700; color:var(--accent-strong); text-transform:uppercase; }
+    .score-bar { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:18px 0; padding:12px 15px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .score-bar strong { font-size:17px; }
+    .score-bar .section-note { margin:0; flex:1 1 260px; }
+    .score-bar .bar-buttons { display:flex; gap:8px; margin-left:auto; }
+    .sec-score { display:inline-flex; align-items:center; min-height:30px; margin:14px 0 0; padding:4px 12px; border:1px solid var(--accent); border-radius:999px; background:var(--accent-soft); color:var(--accent-strong); font-size:13px; font-weight:700; }
+    .quiz { margin-top:12px; }
+    .quiz-card { margin:10px 0; padding:14px 15px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .quiz-card p.q { margin-bottom:10px; font-weight:700; }
+    .options { display:grid; gap:8px; }
+    .options button { min-height:40px; padding:8px 12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); font-size:15px; text-align:left; cursor:pointer; }
+    .options button:hover:enabled { border-color:var(--accent); background:var(--accent-soft); }
+    .options button:disabled { cursor:default; opacity:0.85; }
+    .options button.correct { border-color:var(--accent-strong); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; opacity:1; }
+    .options button.incorrect { border-color:var(--warn); background:var(--warn-soft); color:var(--warn); font-weight:700; opacity:1; }
+    .explain { display:none; margin:10px 0 0; padding:10px 12px; border-left:3px solid var(--accent); background:var(--accent-soft); border-radius:0 6px 6px 0; color:var(--text); }
+    .explain.show { display:block; }
+    .show-all .explain { display:block; }
+    .show-all .options button[data-correct="1"] { border-color:var(--accent-strong); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
+    .verdict { font-weight:700; }
+    .verdict.good { color:var(--accent-strong); }
+    .verdict.bad { color:var(--warn); }
+    .bar-btn { min-height:38px; border:1px solid var(--accent); border-radius:6px; padding:7px 14px; background:var(--accent); color:#ffffff; font-weight:700; font-size:14px; cursor:pointer; }
+    .bar-btn:hover { background:var(--accent-strong); border-color:var(--accent-strong); }
+    .bar-btn.secondary { background:var(--panel); color:var(--text); border-color:var(--line); }
+    .bar-btn.secondary:hover { border-color:var(--accent); color:var(--accent-strong); background:var(--accent-soft); }
+    .source-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+    .source-grid article { padding:14px; margin-bottom:0; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GPU kernel optimization study hub</p>
+      <h1>GPU Kernel Optimization Revision and MCQ Practice</h1>
+    </div>
+    <nav aria-label="Site navigation">
+      <a href="index.html">Hub</a>
+      <a href="#arch">SIMT</a>
+      <a href="#mem">Memory</a>
+      <a href="#prof">Profiling</a>
+      <a href="#opt">Techniques</a>
+      <a href="#cpp">C++17</a>
+      <a href="#port">Portability</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="section intro">
+      <h2>Study Goal</h2>
+      <p>
+        Revision notes and practice questions for a GPU kernel optimization assessment. The job is
+        profiler-guided: take a kernel you did not write, read Nsight Compute metrics (speed-of-light,
+        occupancy, L2 hit rate and throughput, sectors per request, warp-stall reasons), classify the
+        bottleneck, apply the matching fix, and be able to say when a metric is <em>not</em> telling you
+        anything. Six sections cover the machine model, the memory system, the profiler, the optimization
+        playbook, C++17, and portability across CUDA/HIP/shader models. Difficulty runs from recall up to
+        applied reasoning with real numbers.
+      </p>
+    </section>
+
+    <div class="score-bar" id="score-bar">
+      <strong id="score-text">Score: 0 / 0</strong>
+      <p class="section-note" id="score-note"></p>
+      <div class="bar-buttons">
+        <button class="bar-btn secondary" id="toggle-explain" type="button">Show all explanations</button>
+        <button class="bar-btn" id="retry" type="button">Retry (reshuffle)</button>
+      </div>
+    </div>
+
+    <!-- ================= 1. SIMT ARCHITECTURE ================= -->
+    <section id="arch" class="section">
+      <h2>1. SIMT Execution Model &amp; Architecture</h2>
+      <p class="section-note">
+        The machine model every optimization reasons against: streaming multiprocessors, warps in lockstep,
+        blocks that must be independent, and an SM that hides latency by switching warps instead of
+        predicting branches. Vocabulary is CUDA's; HIP and shader models map one-to-one.
+      </p>
+
+      <h3 class="sub">Key terms</h3>
+      <dl class="def-list">
+        <div><dt>SM (streaming multiprocessor)</dt><dd>The GPU's core unit: warp schedulers, ALU/FP pipes, tensor cores, a register file, and L1/shared memory. A kernel's blocks are distributed across SMs; each block runs entirely on one SM.</dd></div>
+        <div><dt>Warp</dt><dd>A fixed group of 32 threads issued together. The hardware schedules and issues instructions per warp, never per thread. (AMD calls it a wavefront — 64 lanes on CDNA.)</dd></div>
+        <div><dt>SIMT</dt><dd>Single Instruction, Multiple Threads: one instruction is executed by all active lanes of a warp on different data. Threads may branch independently, paid for with masked serial execution.</dd></div>
+        <div><dt>Thread block</dt><dd>Up to 1024 threads that share shared memory and can barrier-sync with <code>__syncthreads()</code>. Blocks must not depend on each other's execution order.</dd></div>
+        <div><dt>Grid</dt><dd>All blocks of one launch. No grid-wide barrier exists inside a kernel; grid-level ordering comes from consecutive kernel launches on a stream (or cooperative groups).</dd></div>
+        <div><dt>Warp scheduler</dt><dd>Per-SM units (typically 4) that each cycle pick an eligible resident warp and issue its next instruction. Stalled warps cost nothing while others can issue.</dd></div>
+        <div><dt>Occupancy</dt><dd>Resident warps on an SM divided by the hardware maximum (e.g. 48–64 warps). Limited by registers/thread, shared memory/block, and block-slot count. A means to hide latency, not a score to maximize.</dd></div>
+        <div><dt>Warp divergence</dt><dd>Threads of one warp taking different branch paths: the warp executes each path serially with non-participating lanes masked. Divergence between different warps is free.</dd></div>
+        <div><dt>Register file</dt><dd>Per-SM pool (typically 64K 32-bit registers). Each thread's registers are private and allocated for its whole lifetime — heavy usage per thread cuts how many warps fit.</dd></div>
+        <div><dt>Latency hiding</dt><dd>The GPU's answer to memory latency: instead of caches and out-of-order execution, keep enough warps resident that some warp is always ready to issue while others wait.</dd></div>
+        <div><dt>Independent thread scheduling</dt><dd>Since Volta, each thread has its own program counter, so lanes of a warp can interleave. Warp-level intrinsics therefore take an explicit mask and a <code>_sync</code> suffix (e.g. <code>__shfl_down_sync(0xffffffff, …)</code>).</dd></div>
+        <div><dt>Tail effect</dt><dd>End-of-kernel (or end-of-wave) underutilization: the last wave of blocks doesn't fill all SMs, so achieved occupancy and throughput sag even though the kernel is otherwise healthy.</dd></div>
+      </dl>
+
+      <h3 class="sub">Core concepts</h3>
+      <div class="term-grid">
+        <article class="term-card"><h3>Think in warps, not threads</h3><p>The scheduler issues to 32-thread warps. An <code>if</code> that splits a warp runs both sides serially with lanes masked; a warp requesting 32 scattered addresses pays for 32 memory transactions. Fast kernels arrange work so warp-neighbor threads branch together and touch neighboring data. Corollary: block sizes should be multiples of 32 — a 100-thread block occupies 4 warps and wastes 28 lanes of the last one.</p></article>
+        <article class="term-card"><h3>Latency hiding, not latency avoidance</h3><p>A global load takes hundreds of cycles. CPUs attack that with big caches, prefetchers, and out-of-order engines; a GPU simply switches to another resident warp — a zero-cost context switch, because every warp's registers stay allocated. This works only if enough warps are resident (occupancy) <em>and</em> they have independent work. Both occupancy and per-thread ILP are ways to buy "bytes in flight".</p></article>
+        <article class="term-card"><h3>What limits occupancy</h3><p>Three per-SM budgets: registers (64K × 32-bit — at 128 registers/thread only 512 threads fit), shared memory (a 48 KB/block kernel on a 100 KB SM fits 2 blocks), and block slots (max blocks per SM). The occupancy calculator in Nsight Compute shows which budget binds. Fixes: fewer registers (<code>__launch_bounds__</code>), smaller tiles, or different block sizes — but verify the fix didn't cause register spills.</p></article>
+        <article class="term-card"><h3>Blocks are independent by contract</h3><p>Blocks may run in any order, on any SM, possibly never concurrently. "Block 0 produces, block 1 consumes" is a race or deadlock. Grid-wide agreement = end the kernel and launch another (launches on one stream are ordered), or atomics designed for it. This contract is what lets the same binary scale from 10 SMs to 150.</p></article>
+        <article class="term-card"><h3>Divergence: cost and cures</h3><p>Divergence cost is proportional to how many distinct paths a warp executes. Cures: sort/partition work so warp-mates take the same branch, convert short branches to predication (compilers do this for small <code>if</code>s automatically), move uniform decisions out of the kernel via template parameters, and remember: a branch on <code>blockIdx</code> or on a value uniform across the warp costs nothing.</p></article>
+        <article class="term-card"><h3>Barriers and their scope</h3><p><code>__syncthreads()</code> synchronizes one block, and every thread of the block must reach it — calling it inside a divergent branch is undefined behavior (historically a deadlock). Warp-level exchanges don't need it: shuffles are already synchronized by their mask. Cooperative groups generalize the idea (tile, block, grid scopes) with explicit group objects.</p></article>
+      </div>
+
+      <p class="diagram-title">Execution hierarchy and where things live</p>
+      <pre class="diagram">Grid (one kernel launch)
+ ├─ Block 0                Block 1   ...   Block B−1     ← independent, any order,
+ │   ├─ Warp 0 = threads  0..31  ─ issued together        no grid-wide barrier
+ │   ├─ Warp 1 = threads 32..63
+ │   └─ shared memory ← this block only, __syncthreads() barrier
+ └─ each block is scheduled onto one SM
+
+per-SM budgets (typical):        occupancy example:
+  64K 32-bit registers            kernel uses 128 regs/thread
+  ~100–228 KB shared/L1           → 65536/128 = 512 threads/SM
+  48–64 resident warps max        → 16 warps of a 48-warp max = 33%
+  16–32 resident blocks max       register-bound, regardless of block size</pre>
+
+      <p class="diagram-title">Warp divergence — both sides run, lanes masked</p>
+      <pre class="diagram">if (threadIdx.x % 2 == 0)  A();  else  B();     // splits every warp
+
+warp timeline:   A: █░█░█░█░ ... (odd lanes masked off)
+                 B: ░█░█░█░█ ... (even lanes masked off)   cost ≈ A + B
+
+if ((threadIdx.x / 32) % 2 == 0) ...            // splits between warps
+warp 0 runs A, warp 1 runs B — different warps, no masking, no extra cost</pre>
+
+      <div class="link-list">
+        <a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/" target="_blank" rel="noopener">CUDA C++ Programming Guide</a>
+        <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">CUDA C++ Best Practices Guide</a>
+        <a href="https://developer.nvidia.com/blog/cuda-refresher-cuda-programming-model/" target="_blank" rel="noopener">CUDA Refresher: the programming model</a>
+      </div>
+
+      <h3 class="sub">Practice questions</h3>
+      <span class="sec-score" id="sec-score-arch">Section score: 0 / 0</span>
+      <div class="quiz" data-section="arch"></div>
+    </section>
+
+    <!-- ================= 2. MEMORY HIERARCHY ================= -->
+    <section id="mem" class="section">
+      <h2>2. Memory Hierarchy &amp; Access Patterns</h2>
+      <p class="section-note">
+        Most kernels are memory-bound, so the core skill is moving fewer bytes and moving them in the
+        shapes the hardware likes: coalesced sectors from DRAM, conflict-free banks in shared memory,
+        and reuse staged at the right level.
+      </p>
+
+      <h3 class="sub">Key terms</h3>
+      <dl class="def-list">
+        <div><dt>Global memory</dt><dd>Device DRAM (GDDR/HBM), visible to all threads, hundreds of GB/s to TB/s of bandwidth but ~400–800 cycles of latency. The usual bottleneck.</dd></div>
+        <div><dt>Sector</dt><dd>The 32-byte unit the memory system actually moves. A 128-byte cache line is four sectors; the profiler counts sectors, and wasted sectors are wasted bandwidth.</dd></div>
+        <div><dt>Coalescing</dt><dd>When a warp's 32 addresses fall in few sectors, the hardware merges them: 32 consecutive 4-byte loads = 128 bytes = 4 sectors in one request. Scattered addresses can cost 32 sectors for the same 128 useful bytes.</dd></div>
+        <div><dt>L1 cache / shared memory</dt><dd>One per-SM physical array split between hardware-managed L1 and programmer-managed shared memory (carve-out configurable). Shared memory ≈ 20–30× lower latency than global.</dd></div>
+        <div><dt>Shared memory banks</dt><dd>Shared memory is divided into 32 banks, 4 bytes wide. Warp accesses to different banks (or the same address — broadcast) proceed in parallel; different addresses in one bank serialize (bank conflict).</dd></div>
+        <div><dt>L2 cache</dt><dd>Device-wide cache (tens of MB on modern GPUs) shared by all SMs; every global access that misses L1 goes through it. The coherence point of the device.</dd></div>
+        <div><dt>Local memory</dt><dd>Per-thread spill space that lives in <em>device memory</em> (cached in L1/L2) despite the name. Register spills and indexed thread-local arrays end up here — visible in ncu as LDL/STL instructions.</dd></div>
+        <div><dt>Constant memory</dt><dd>Small cached read-only region optimized for broadcast: fastest when every thread of a warp reads the same address; divergent addresses serialize.</dd></div>
+        <div><dt>Read-only / texture path</dt><dd><code>__ldg()</code> / <code>const __restrict__</code> loads route through the read-only data cache; texture objects add addressing/filtering hardware.</dd></div>
+        <div><dt>Vectorized access</dt><dd><code>float4</code>/<code>int4</code> (128-bit) loads move 16 bytes per thread in one instruction — fewer instructions and fewer requests for the same bytes. Requires 16-byte alignment.</dd></div>
+        <div><dt>Async copy (cp.async / TMA)</dt><dd>Ampere's <code>cp.async</code> copies global→shared without staging through registers; Hopper/Blackwell's TMA engine transfers whole tiles asynchronously, freeing threads and registers for compute.</dd></div>
+        <div><dt>Pinned (page-locked) host memory</dt><dd>Host allocation that can't be paged out, enabling faster DMA transfers and true overlap of <code>cudaMemcpyAsync</code> with kernels via streams.</dd></div>
+      </dl>
+
+      <h3 class="sub">Core concepts</h3>
+      <div class="term-grid">
+        <article class="term-card"><h3>Count sectors, not accesses</h3><p>The question the hardware asks is not "how many loads?" but "how many 32-byte sectors did those loads touch, and how many of the bytes in each were used?" Warp-consecutive 4-byte loads: 4 sectors, 100% used. Stride-2: 8 sectors, 50% used — 2× traffic for the same data. Fully scattered: up to 32 sectors, ~12% used. Nsight Compute's "sectors per request" makes this visible: ~4 is ideal for 32-bit accesses, 32 is a layout bug.</p></article>
+        <article class="term-card"><h3>SoA beats AoS on GPUs</h3><p>With an array of structs, thread <em>i</em> reading <code>p[i].x</code> strides over the other fields, wasting most of each sector. Structure-of-arrays puts all <code>x</code> together so warp-neighbor threads read memory-neighbor values. Same data, same loads, order-of-magnitude difference in effective bandwidth — the most common single fix in real codebases.</p></article>
+        <article class="term-card"><h3>Shared memory is for reuse</h3><p>Stage a tile of global data into shared memory once, <code>__syncthreads()</code>, then let the whole block reuse it many times — the tiled matrix-multiply pattern that turns a memory-bound loop into a compute-bound one. Two pitfalls: forgetting the second barrier before overwriting the tile, and bank conflicts on column-wise access (fix: pad the tile to <code>[T][T+1]</code> so column neighbors land in different banks).</p></article>
+        <article class="term-card"><h3>Registers are the fastest memory — until they spill</h3><p>The compiler keeps hot values in registers; past ~255 per thread (or a <code>maxrregcount</code> cap) it spills to local memory — device DRAM with a cache in front. A "harmless" occupancy tweak that forces spills can make a kernel slower: watch for LDL/STL in the SASS and the local-memory traffic counters in ncu. Dynamic indexing into a small per-thread array also silently lands in local memory.</p></article>
+        <article class="term-card"><h3>The L2 is a bandwidth amplifier</h3><p>All SMs share L2. When many blocks read the same region (weights, lookup tables, halo cells), L2 serves them at multiples of DRAM bandwidth. Working set slightly bigger than L2? Reorder the schedule (block-swizzling, tiling over the grid) so blocks that share data run near each other in time. Streaming kernels that touch each byte exactly once get nothing from L2 — by design.</p></article>
+        <article class="term-card"><h3>Keep the pipeline on the device</h3><p>PCIe is tens of GB/s; HBM is thousands. Any workflow that copies down between kernels is transfer-bound by design. Upload once, chain kernels on device buffers, download once; use pinned memory + <code>cudaMemcpyAsync</code> + streams to overlap the copies that remain with compute of the previous batch.</p></article>
+      </div>
+
+      <p class="diagram-title">Coalescing in sectors — one warp, 32 × 4-byte loads</p>
+      <pre class="diagram">consecutive:  threads 0..31 → addresses 0,4,8,...,124
+              [sector 0][sector 1][sector 2][sector 3]      4 sectors, 128/128 bytes used ✓
+
+stride 2:     addresses 0,8,16,...,248
+              [s0][s1][s2][s3][s4][s5][s6][s7]              8 sectors, 128/256 bytes used — 2× traffic
+
+scattered:    32 random addresses
+              up to 32 sectors                              1024 bytes moved for 128 used — ~8× traffic
+
+ncu metric: "sectors/req" ≈ 4 is ideal for 32-bit accesses; 32 means fix the layout</pre>
+
+      <p class="diagram-title">Storage levels — scope and rough latency</p>
+      <pre class="diagram">storage            scope          approx latency     managed by
+─────────────────  ─────────────  ─────────────────  ───────────────────────
+registers          per thread     ~1 cycle           compiler
+shared memory      per block      ~20–30 cycles      you (explicit staging)
+L1 cache           per SM         ~30 cycles         hardware
+L2 cache           whole device   ~200 cycles        hardware
+global (DRAM)      whole device   ~400–800 cycles    you (access patterns)
+host RAM (PCIe)    via memcpy     microseconds       you (batch + overlap)
+
+"local memory" = per-thread spills → lives in DRAM, cached in L1/L2 — not fast</pre>
+
+      <p class="diagram-title">Bank conflicts — column access into a shared tile</p>
+      <pre class="diagram">__shared__ float t[32][32];          t[i][col]: column elements are 32 floats
+                                     apart → ALL map to the same bank
+thread 0 → t[0][c]  bank c
+thread 1 → t[1][c]  bank c   ← 32-way conflict: 32 serialized cycles
+...
+fix:  __shared__ float t[32][33];    row stride 33 → column walks banks
+thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
+
+      <div class="link-list">
+        <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#memory-optimizations" target="_blank" rel="noopener">Best Practices: memory optimizations</a>
+        <a href="https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/" target="_blank" rel="noopener">Accessing global memory efficiently</a>
+        <a href="https://developer.nvidia.com/blog/using-shared-memory-cuda-cc/" target="_blank" rel="noopener">Using shared memory in CUDA C/C++</a>
+        <a href="https://developer.nvidia.com/blog/cuda-pro-tip-increase-performance-with-vectorized-memory-access/" target="_blank" rel="noopener">Vectorized memory access</a>
+      </div>
+
+      <h3 class="sub">Practice questions</h3>
+      <span class="sec-score" id="sec-score-mem">Section score: 0 / 0</span>
+      <div class="quiz" data-section="mem"></div>
+    </section>
+
+    <!-- ================= 3. PROFILER-GUIDED OPTIMIZATION ================= -->
+    <section id="prof" class="section">
+      <h2>3. Profiler-Guided Optimization — Nsight Compute</h2>
+      <p class="section-note">
+        The heart of the job: run <code>ncu</code>, classify the kernel as compute-, memory-, or
+        latency-bound from speed-of-light and stall data, pick the fix that matches, and know when a
+        metric (L2 hit rate, occupancy) is lying to you — or simply irrelevant.
+      </p>
+
+      <h3 class="sub">Key terms</h3>
+      <dl class="def-list">
+        <div><dt>Nsight Systems (nsys)</dt><dd>Whole-application timeline profiler: kernels, memcpys, CPU threads, API calls, gaps. Always the first tool — it tells you <em>which</em> kernel (or copy, or gap) deserves attention.</dd></div>
+        <div><dt>Nsight Compute (ncu)</dt><dd>Single-kernel profiler: replays a kernel to collect detailed hardware counters, organized into sections (Speed of Light, Memory Workload, Scheduler/Warp Statistics, Occupancy, Source Counters) with rule-based guided analysis.</dd></div>
+        <div><dt>Speed of Light (SOL)</dt><dd>Headline pair of percentages: SM throughput and memory throughput, each relative to that GPU's peak. The first classification: which resource is closest to its ceiling?</dd></div>
+        <div><dt>Compute-bound</dt><dd>SM SOL high (~&gt;70–80%): the ALU/tensor pipes are the ceiling. Fixes: cheaper math, lower precision/tensor cores, better algorithm — memory tuning won't help.</dd></div>
+        <div><dt>Memory-bound</dt><dd>Memory SOL high: some level of the memory system is the ceiling. Drill into Memory Workload Analysis to find <em>which</em> level (DRAM, L2, L1, shared).</dd></div>
+        <div><dt>Latency-bound</dt><dd>Both SOLs low: nothing saturated — the SM idles between dependent operations. Not enough warps in flight, too little ILP, divergence, or serialization. The subtle case.</dd></div>
+        <div><dt>Theoretical vs achieved occupancy</dt><dd>Theoretical = best the launch config allows given register/shared budgets. Achieved = measured average. A big gap points at load imbalance, tail effect, or too few blocks — not at resource limits.</dd></div>
+        <div><dt>L2 hit rate</dt><dd>Fraction of L2 requests served without going to DRAM. High = reuse is being captured; low can be a problem (working set thrashing) or perfectly fine (pure streaming, each byte read once).</dd></div>
+        <div><dt>L2 / DRAM throughput</dt><dd>Actual bytes/s through each level vs its peak. High L2 + low DRAM throughput = cache is amplifying bandwidth; DRAM near peak = you're paying full price for every byte.</dd></div>
+        <div><dt>Sectors per request</dt><dd>Average 32-byte sectors moved per warp memory request. ≈4 is ideal for 32-bit accesses; larger means uncoalesced access and wasted bandwidth.</dd></div>
+        <div><dt>Warp stall reasons</dt><dd>Per-cycle sample of why warps couldn't issue: Long Scoreboard (waiting on global/local memory), Short Scoreboard (shared memory), Barrier, Wait (fixed-latency dependency), MIO/LG Throttle (memory-op queues full), Not Selected (eligible, scheduler picked another — benign).</dd></div>
+        <div><dt>Roofline / arithmetic intensity</dt><dd>AI = FLOPs per byte of DRAM traffic. Below the ridge point (peak FLOPs ÷ peak bandwidth) a kernel is bandwidth-limited: more FLOP/s is impossible without raising reuse.</dd></div>
+        <div><dt>Effective bandwidth</dt><dd>(bytes read + written) ÷ kernel time, compared to peak. Two lines of arithmetic that instantly say whether a memory-bound kernel is near the roof or leaving 5× on the table.</dd></div>
+        <div><dt>Kernel replay</dt><dd>ncu re-runs the kernel several times to collect all counters; results assume repeatable behavior. Profile with locked clocks (<code>--clock-control</code>) for stable numbers.</dd></div>
+      </dl>
+
+      <h3 class="sub">Core concepts</h3>
+      <div class="term-grid">
+        <article class="term-card"><h3>Timeline first, kernel second</h3><p>Optimizing a kernel that is 8% of the wall time caps your win at 8% (Amdahl). <code>nsys</code> shows where time actually goes: kernels, memcpys, or gaps where the GPU waits on the CPU. Only once a kernel dominates do you point <code>ncu</code> at it. Re-profile after every fix — the bottleneck moves.</p></article>
+        <article class="term-card"><h3>The SOL triage</h3><p>SM% high → compute-bound: cheaper/lower-precision math, tensor cores, better algorithm. Memory% high → memory-bound: find the saturated level and reduce its traffic. Both low → latency-bound: more parallelism (occupancy, ILP, several elements per thread), fix divergence, split serialized atomics. Both high → the kernel is balanced and near the roof; only algorithmic change helps. This one chart picks which section of the playbook applies.</p></article>
+        <article class="term-card"><h3>Reading L2 metrics honestly</h3><p>High L2 hit rate is good news only if L2 <em>traffic matters</em>. Pure streaming kernels (each byte used once) show low hit rates — expected, not fixable, and not worth chasing. Conversely a great hit rate can hide a bug: massively redundant loads that L2 absorbs still burn L2 bandwidth — check whether L2 throughput itself is the saturated ceiling. The honest chain: which level is nearest peak → what traffic hits it → is that traffic necessary?</p></article>
+        <article class="term-card"><h3>Occupancy is a means, not a score</h3><p>Occupancy buys latency hiding. If DRAM is already at 90% of peak, more warps change nothing — the kernel is bandwidth-bound, not latency-bound. If both SOLs are low and Long Scoreboard stalls dominate, <em>then</em> raising occupancy (or ILP per thread) is exactly the fix. Also compare theoretical vs achieved: a gap means imbalance or tail effect — fix the launch shape, not the register count.</p></article>
+        <article class="term-card"><h3>Stall reasons name the culprit</h3><p>Long Scoreboard = warps parked on global-memory dependencies → coalesce, cache, prefetch, add ILP. Short Scoreboard = shared-memory pressure/bank conflicts. Barrier = threads waiting at <code>__syncthreads()</code> → unbalanced work or oversized blocks. LG/MIO Throttle = memory-op queues full → too many small requests; vectorize. "Not Selected" is healthy — it means there were spare eligible warps. Stall data turns "memory-bound" from a shrug into a specific edit.</p></article>
+        <article class="term-card"><h3>Back-of-envelope beats guessing</h3><p>A kernel moves 800 MB in 10 ms → 80 GB/s. On a 900 GB/s part that's 9% of peak: latency or access-pattern problem, not bandwidth. At 700 GB/s it's near the roof: only moving fewer bytes (fusion, reuse, smaller types) can help. Same for FLOPs vs peak. Do this arithmetic before and after every change — it catches both fake wins and fake losses.</p></article>
+      </div>
+
+      <p class="diagram-title">Bottleneck decision tree — measure, classify, fix</p>
+      <pre class="diagram">nsys timeline of the whole app
+ │
+ ├─ memcpys dominate?  ──▶ TRANSFER-BOUND: keep data resident, pinned
+ │                          memory, overlap copies with streams
+ ├─ gaps between kernels? ─▶ LAUNCH/CPU-BOUND: fuse tiny kernels, batch,
+ │                          CUDA Graphs
+ └─ one kernel dominates? ─▶ ncu on that kernel — read Speed of Light:
+        │
+        ├─ SM% high ────────▶ COMPUTE-BOUND: lower precision / tensor
+        │                     cores, cheaper algorithm, library call
+        ├─ Memory% high ────▶ MEMORY-BOUND: which level is at peak?
+        │      ├─ DRAM  → move fewer bytes: fuse, tile reuse into shared,
+        │      │          SoA + coalescing (sectors/req!), FP16, recompute
+        │      ├─ L2    → reduce redundant traffic, block swizzle for reuse
+        │      └─ L1/shared → bank conflicts, vectorize, shift reuse to registers
+        └─ neither high ────▶ LATENCY-BOUND: raise occupancy or ILP,
+                              fix divergence &amp; barriers, split atomic hotspots
+                              (check warp-stall reasons to pick)</pre>
+
+      <p class="diagram-title">Warp-stall cheat sheet</p>
+      <pre class="diagram">stall reason      warp is waiting for…            typical fix
+────────────────  ──────────────────────────────  ─────────────────────────────
+Long Scoreboard   global/local memory load        coalesce, cache in shared,
+                                                  more ILP / occupancy
+Short Scoreboard  shared-memory operation         fix bank conflicts, padding
+Barrier           others at __syncthreads()       balance work, smaller blocks
+Wait              fixed-latency ALU dependency    unroll, more independent ops
+LG/MIO Throttle   memory-instruction queue full   vectorize (fewer, wider ops)
+Not Selected      nothing — spare eligible warp   benign; enough parallelism
+No Instruction    instruction fetch               rare: shrink giant kernels</pre>
+
+      <p class="diagram-title">Roofline — what the position tells you</p>
+      <pre class="diagram">attainable            ridge point = peak FLOPs / peak BW
+FLOP/s   ┤            ____________________ peak compute
+         │           /
+         │          /│
+         │  slope  / │      ● K2 (compute-bound: cheaper math helps)
+         │ = peak /  │
+         │   BW  /   │
+         │      / ● K1 (memory-bound: only higher AI helps —
+         │     /      fuse, tile, reuse; more FLOP/s impossible)
+         └────┴──────┴──────────────────▶ arithmetic intensity (FLOP/byte)
+
+SAXPY: 2 FLOPs / 12 bytes ≈ 0.17 — hopelessly memory-bound
+tiled SGEMM: O(N) reuse per element — lives right of the ridge</pre>
+
+      <div class="link-list">
+        <a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html" target="_blank" rel="noopener">Nsight Compute Kernel Profiling Guide</a>
+        <a href="https://developer.nvidia.com/blog/using-nsight-compute-to-inspect-your-kernels/" target="_blank" rel="noopener">Using Nsight Compute to inspect kernels</a>
+        <a href="https://developer.nvidia.com/blog/nsight-systems-exposes-gpu-optimization/" target="_blank" rel="noopener">Nsight Systems exposes GPU optimization</a>
+        <a href="https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html" target="_blank" rel="noopener">GPU performance background (NVIDIA)</a>
+        <a href="https://en.wikipedia.org/wiki/Roofline_model" target="_blank" rel="noopener">Roofline model</a>
+      </div>
+
+      <h3 class="sub">Practice questions</h3>
+      <span class="sec-score" id="sec-score-prof">Section score: 0 / 0</span>
+      <div class="quiz" data-section="prof"></div>
+    </section>
+
+    <!-- ================= 4. OPTIMIZATION TECHNIQUES ================= -->
+    <section id="opt" class="section">
+      <h2>4. The Optimization Playbook</h2>
+      <p class="section-note">
+        The standard moves, each tied to the bottleneck it removes: tiling and fusion for DRAM traffic,
+        ILP and vectorization for latency, shuffles and privatization for serialization, tensor cores and
+        PTX for compute, libraries before hand-rolled everything.
+      </p>
+
+      <h3 class="sub">Key terms</h3>
+      <dl class="def-list">
+        <div><dt>Tiling</dt><dd>Partition data into tiles staged in shared memory (or registers) so each global byte is loaded once and reused many times — raising arithmetic intensity.</dd></div>
+        <div><dt>Kernel fusion</dt><dd>Merging consecutive elementwise/short kernels into one so intermediates stay in registers instead of making a DRAM round trip per stage.</dd></div>
+        <div><dt>Grid-stride loop</dt><dd><code>for (i = blockIdx.x*blockDim.x + threadIdx.x; i &lt; n; i += gridDim.x*blockDim.x)</code> — decouples grid size from problem size, handles any <em>n</em>, and lets one thread process several elements (ILP for free).</dd></div>
+        <div><dt>ILP (instruction-level parallelism)</dt><dd>Independent operations per thread that the pipeline can overlap. Processing 4 elements per thread hides latency even at low occupancy — occupancy's complement.</dd></div>
+        <div><dt>Loop unrolling</dt><dd><code>#pragma unroll</code> with compile-time trip counts: removes loop overhead, enables register allocation of array elements, exposes ILP. Needs bounds known at compile time — hence template tile sizes.</dd></div>
+        <div><dt>Warp shuffle</dt><dd><code>__shfl_down_sync</code>/<code>__shfl_xor_sync</code>: exchange registers between lanes of a warp directly — no shared memory, no <code>__syncthreads()</code>. The fast lane for warp-level reductions and scans.</dd></div>
+        <div><dt>Privatization</dt><dd>Give each block (or warp/thread) a private copy of a contended structure — e.g. per-block histogram in shared memory — then merge once at the end, turning a global atomic hotspot into cheap local updates.</dd></div>
+        <div><dt>__launch_bounds__ / maxrregcount</dt><dd>Caps on registers per thread so more warps fit. The tradeoff: too tight a cap forces spills to local memory — verify with ncu that occupancy gained &gt; spill traffic lost.</dd></div>
+        <div><dt>Tensor cores</dt><dd>Matrix-multiply-accumulate units operating on small tiles (FP16/BF16/TF32/FP8, FP4 on Blackwell; FP32 accumulate). Reached via cuBLAS/cuDNN/CUTLASS, the <code>wmma</code> API, or <code>mma</code>/<code>tcgen05</code> PTX.</dd></div>
+        <div><dt>Inline PTX</dt><dd><code>asm volatile("…")</code> embedding GPU assembly for instructions the compiler won't emit or ordering it won't preserve. Last resort; document why.</dd></div>
+        <div><dt>CCCL (CUDA C++ Core Libraries)</dt><dd>Thrust (host-callable device-wide algorithms), CUB (warp/block/device building blocks you compose <em>inside</em> kernels: BlockReduce, BlockScan, DeviceRadixSort), libcu++ (<code>cuda::std::</code> atomics, barriers, pipelines).</dd></div>
+        <div><dt>Streams &amp; CUDA Graphs</dt><dd>Streams order work and enable copy/compute overlap; graphs record a whole launch DAG and replay it with one call, killing per-launch CPU overhead for many small kernels.</dd></div>
+        <div><dt>Double buffering</dt><dd>Ping-pong two shared-memory tiles: while computing on tile A, asynchronously load tile B (<code>cp.async</code>/TMA), then swap — overlapping the load latency with math.</dd></div>
+      </dl>
+
+      <h3 class="sub">Core concepts</h3>
+      <div class="term-grid">
+        <article class="term-card"><h3>Match the move to the measurement</h3><p>Every technique attacks one bottleneck: DRAM-bound → tiling, fusion, SoA, smaller types; latency-bound → ILP, occupancy, grid-stride with multiple elements; serialization → shuffles, privatization, fewer atomics on one address; compute-bound → tensor cores, lower precision, better algorithm; launch-bound → fusion and graphs. Applying a technique without the measurement is how kernels get "optimized" slower.</p></article>
+        <article class="term-card"><h3>Tiled matmul, the canonical pattern</h3><p>Naive SGEMM reads each input element N times from global memory. Tile it: each block loads a T×T tile of A and B into shared memory (coalesced), <code>__syncthreads()</code>, computes the partial product with each element reused T times, <code>__syncthreads()</code> again, next tile. AI rises from ~0.25 to ~T/4 FLOP/byte — from hopeless to compute-bound. Every further refinement (register blocking, double buffering, tensor cores) builds on this skeleton.</p></article>
+        <article class="term-card"><h3>Reductions done right</h3><p>Tree-reduce in shared memory down to 32 values with strides that keep active threads contiguous (avoids divergence), then finish the last five steps with <code>__shfl_down_sync</code> — no barriers needed inside a warp. Combine per-block partials with one <code>atomicAdd</code> per block or a second tiny kernel. CUB's <code>BlockReduce</code> packages exactly this; using it is usually the professional answer.</p></article>
+        <article class="term-card"><h3>Libraries before heroics</h3><p>cuBLAS/cuFFT/cuDNN, CUTLASS templates, and CUB primitives are tuned per architecture by people with the hardware manuals. The professional pattern: compose libraries for the heavy math, write custom kernels only for the glue between them — and fuse that glue. Hand-writing a GEMM that loses 3× to cuBLAS is a rite of passage, not a deliverable.</p></article>
+        <article class="term-card"><h3>Compile-time knowledge is performance</h3><p>Template parameters for tile sizes and flags turn runtime values into compile-time constants: static shared arrays get sized, loops fully unroll, per-thread arrays live in registers, dead branches vanish under <code>if constexpr</code>. The cost is one kernel instantiation per configuration — the standard trick behind CUTLASS's and CUB's performance.</p></article>
+        <article class="term-card"><h3>Know when you're done</h3><p>A memory-bound kernel at ~85% of DRAM peak with sectors/req ≈ 4 is finished — further tuning is noise; only an algorithmic change (move fewer bytes) can help. A compute-bound kernel near SM peak on the right pipes is likewise done. Write that down with the metrics as evidence: "done, and here's why" is a deliverable in profiler-guided work.</p></article>
+      </div>
+
+      <p class="diagram-title">Tiled matrix multiply — one block's loop</p>
+      <pre class="diagram">__shared__ float As[T][T], Bs[T][T+1];            // +1: avoid bank conflicts
+float acc = 0;
+for (int k0 = 0; k0 &lt; N; k0 += T) {
+    As[ty][tx] = A[row*N + k0+tx];                // coalesced global load
+    Bs[ty][tx] = B[(k0+ty)*N + col];
+    __syncthreads();                              // tile fully loaded
+    #pragma unroll
+    for (int k = 0; k &lt; T; ++k)
+        acc += As[ty][k] * Bs[k][tx];             // each element reused T times
+    __syncthreads();                              // done reading before overwrite
+}
+C[row*N + col] = acc;
+
+each global element: loaded once per tile instead of once per use
+arithmetic intensity: ~0.25 → ~T/4 FLOP/byte  (T=32 → 8: compute-bound)</pre>
+
+      <p class="diagram-title">Warp reduction with shuffles — last 5 steps, no barriers</p>
+      <pre class="diagram">v += __shfl_down_sync(0xffffffff, v, 16);   lanes 0-15  ← lanes 16-31
+v += __shfl_down_sync(0xffffffff, v, 8);    lanes 0-7   ← lanes 8-15
+v += __shfl_down_sync(0xffffffff, v, 4);
+v += __shfl_down_sync(0xffffffff, v, 2);
+v += __shfl_down_sync(0xffffffff, v, 1);    lane 0 holds the warp sum
+
+register-to-register exchange: no shared memory, no __syncthreads()
+block sum: warp sums → shared[32] → first warp reduces them the same way</pre>
+
+      <p class="diagram-title">Double buffering — hide the load behind the math</p>
+      <pre class="diagram">single buffer:   [load T0]→[compute T0]→[load T1]→[compute T1]→ ...
+                  SM idle during every load
+
+double buffer:   [load T0]→[compute T0 ‖ cp.async T1]→[compute T1 ‖ load T2]→
+                  loads ride under compute; steady state hides them entirely
+                  (Hopper/Blackwell: TMA moves whole tiles without using threads)</pre>
+
+      <div class="link-list">
+        <a href="https://developer.nvidia.com/blog/cuda-pro-tip-write-flexible-kernels-grid-stride-loops/" target="_blank" rel="noopener">Grid-stride loops</a>
+        <a href="https://developer.nvidia.com/blog/using-cuda-warp-level-primitives/" target="_blank" rel="noopener">Warp-level primitives</a>
+        <a href="https://github.com/NVIDIA/cccl" target="_blank" rel="noopener">CCCL: Thrust, CUB, libcu++</a>
+        <a href="https://github.com/NVIDIA/cutlass" target="_blank" rel="noopener">CUTLASS</a>
+        <a href="https://docs.nvidia.com/cuda/inline-ptx-assembly/" target="_blank" rel="noopener">Inline PTX assembly</a>
+        <a href="https://siboehm.com/articles/22/CUDA-MMM" target="_blank" rel="noopener">Optimizing SGEMM step by step (worked example)</a>
+      </div>
+
+      <h3 class="sub">Practice questions</h3>
+      <span class="sec-score" id="sec-score-opt">Section score: 0 / 0</span>
+      <div class="quiz" data-section="opt"></div>
+    </section>
+
+    <!-- ================= 5. C++17 ================= -->
+    <section id="cpp" class="section">
+      <h2>5. C++17 for Kernel Work</h2>
+      <p class="section-note">
+        The role asks for fluency "through C++17". What matters in practice: the compile-time toolkit
+        (templates, <code>constexpr</code>, <code>if constexpr</code>) that makes kernels fast, the
+        vocabulary types (<code>optional</code>, <code>variant</code>, <code>string_view</code>), and the
+        CUDA-specific rules for lambdas and constexpr on device.
+      </p>
+
+      <h3 class="sub">Key terms</h3>
+      <dl class="def-list">
+        <div><dt>if constexpr</dt><dd>Compile-time branch: the false branch is discarded at instantiation, not merely optimized — code in it may even be invalid for the current template arguments (if dependent). Zero runtime cost.</dd></div>
+        <div><dt>constexpr functions</dt><dd>Evaluable at compile time when arguments are constant; also usable in device code. <code>--expt-relaxed-constexpr</code> lets device code call host <code>constexpr</code> functions (e.g. parts of the standard library).</dd></div>
+        <div><dt>Non-type template parameters</dt><dd><code>template&lt;int TILE&gt; __global__ void k(…)</code>: the tile size becomes a compile-time constant — static shared arrays, full unrolling, register allocation. One instantiation per configuration.</dd></div>
+        <div><dt>Structured bindings</dt><dd><code>auto [lo, hi] = minmax(…)</code>: unpack pairs/tuples/structs into named variables.</dd></div>
+        <div><dt>Fold expressions</dt><dd><code>(args + ...)</code>: apply an operator across a parameter pack without recursion — variadic sums, all-of checks, apply-to-each.</dd></div>
+        <div><dt>std::optional</dt><dd>Value-or-empty without sentinels or out-params. <code>std::variant</code> = type-safe union; <code>std::string_view</code> = non-owning view of a string, no allocation, cheap slicing.</dd></div>
+        <div><dt>CTAD</dt><dd>Class template argument deduction: <code>std::pair p{1, 2.0}</code> deduces <code>pair&lt;int,double&gt;</code>.</dd></div>
+        <div><dt>Inline variables</dt><dd><code>inline constexpr int N = 128;</code> in a header — one entity across all TUs, no ODR violations for header-only config constants.</dd></div>
+        <div><dt>[[nodiscard]]</dt><dd>Warns when a return value is ignored — the natural annotation for functions returning <code>cudaError_t</code>-style status codes.</dd></div>
+        <div><dt>Extended / device lambdas</dt><dd><code>nvcc --extended-lambda</code> allows <code>__device__</code>-annotated lambdas passed to kernels or Thrust. Capture by value: a by-reference capture of host stack memory is garbage on the device.</dd></div>
+        <div><dt>type_traits / static_assert</dt><dd>Fully usable in device code: constrain template kernels (<code>static_assert(std::is_floating_point_v&lt;T&gt;)</code>) and dispatch on type properties at compile time.</dd></div>
+        <div><dt>cuda::std (libcu++)</dt><dd>Heterogeneous standard library: <code>cuda::std::atomic</code>, <code>cuda::std::barrier</code>, tuples, type traits — the same types usable in host and device code.</dd></div>
+      </dl>
+
+      <h3 class="sub">Core concepts</h3>
+      <div class="term-grid">
+        <article class="term-card"><h3>if constexpr replaces specialization boilerplate</h3><p>Pre-17, variant behavior in a template kernel meant tag dispatch or partial specialization. Now one kernel body reads naturally: <code>if constexpr (UseBias) { acc += bias[i]; }</code> — the false case compiles to nothing, registers aren't spent on it, and both variants live in one function. Combined with non-type template parameters this is the backbone of modern kernel libraries.</p></article>
+        <article class="term-card"><h3>Compile-time constants are a performance feature</h3><p><code>__shared__ float tile[T][T+1]</code> requires <code>T</code> at compile time; <code>#pragma unroll</code> fully unrolls only known trip counts; a per-thread array indexed by a loop variable stays in registers only if the loop unrolls. That's why kernels take sizes as template parameters and hosts dispatch over a small set of instantiations rather than passing sizes as runtime arguments.</p></article>
+        <article class="term-card"><h3>Value semantics at the boundary</h3><p>Kernel arguments are copied by value to the device (via constant memory), so pass small structs freely — but never pointers to host stack, and never lambdas capturing by reference. The same rule shapes device lambdas: capture by value, or capture device pointers explicitly. A <code>std::vector</code> can't cross the boundary at all — pass the <code>.data()</code> device pointer and size.</p></article>
+        <article class="term-card"><h3>Host-side C++17 hygiene</h3><p>The host code around kernels is ordinary modern C++: RAII wrappers for <code>cudaMalloc</code>/<code>cudaFree</code> (unique_ptr with a custom deleter is idiomatic), <code>[[nodiscard]]</code> status types with a CUDA_CHECK macro, <code>string_view</code> for parsing, <code>optional</code> for maybe-results, structured bindings for multi-returns. Assessments probe this: C++17 fluency means the host harness too, not just the kernel.</p></article>
+      </div>
+
+      <p class="diagram-title">One template kernel, many tuned variants</p>
+      <pre class="diagram">template &lt;int TILE, bool RELU&gt;
+__global__ void fused_gemm_act(const float* A, const float* B, float* C, int n) {
+    __shared__ float As[TILE][TILE + 1];        // TILE must be compile-time
+    ...
+    #pragma unroll                              // fully unrolls: TILE is constant
+    for (int k = 0; k &lt; TILE; ++k) acc += As[ty][k] * Bs[k][tx];
+    if constexpr (RELU) acc = fmaxf(acc, 0.f);  // false → not even compiled
+    ...
+}
+// host dispatch over a closed set of instantiations:
+if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B, C, n);</pre>
+
+      <div class="link-list">
+        <a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#c-language-extensions" target="_blank" rel="noopener">CUDA C++ language extensions</a>
+        <a href="https://nvidia.github.io/cccl/libcudacxx/" target="_blank" rel="noopener">libcu++ documentation</a>
+        <a href="https://en.cppreference.com/w/cpp/17" target="_blank" rel="noopener">cppreference: C++17 feature list</a>
+      </div>
+
+      <h3 class="sub">Practice questions</h3>
+      <span class="sec-score" id="sec-score-cpp">Section score: 0 / 0</span>
+      <div class="quiz" data-section="cpp"></div>
+    </section>
+
+    <!-- ================= 6. PORTABILITY & HARDWARE ================= -->
+    <section id="port" class="section">
+      <h2>6. Portability &amp; Modern Hardware — HIP, Shaders, Blackwell</h2>
+      <p class="section-note">
+        The concepts transfer: warp ≈ wavefront ≈ wave/subgroup, shared memory ≈ LDS ≈ groupshared.
+        What changes are the widths, the tools, and the generation-specific features worth knowing
+        by name.
+      </p>
+
+      <h3 class="sub">Key terms</h3>
+      <dl class="def-list">
+        <div><dt>HIP</dt><dd>AMD's CUDA-shaped runtime and kernel language; compiles for AMD (ROCm) and NVIDIA. API maps ~1:1: <code>cudaMalloc→hipMalloc</code>, <code>&lt;&lt;&lt;…&gt;&gt;&gt;</code> launches work unchanged.</dd></div>
+        <div><dt>hipify</dt><dd>Source-to-source translators (<code>hipify-perl</code>, <code>hipify-clang</code>) that convert CUDA code to HIP; most kernels port with little or no manual editing.</dd></div>
+        <div><dt>Wavefront</dt><dd>AMD's warp: 64 lanes on CDNA (MI-series), 32 on RDNA. Portable warp-level code uses <code>warpSize</code> instead of a hardcoded 32.</dd></div>
+        <div><dt>LDS</dt><dd>Local Data Share — AMD's shared memory. Same role, same bank-conflict reasoning.</dd></div>
+        <div><dt>rocprof / Omniperf</dt><dd>AMD's profiling stack; Omniperf gives ncu-style per-kernel analysis (memory chart, roofline, wavefront occupancy).</dd></div>
+        <div><dt>HLSL compute shader</dt><dd><code>[numthreads(x,y,z)]</code> = block size; <code>groupshared</code> = shared memory; <code>SV_GroupThreadID/SV_DispatchThreadID</code> = threadIdx / global id; <code>GroupMemoryBarrierWithGroupSync()</code> = __syncthreads.</dd></div>
+        <div><dt>Wave intrinsics (SM6+)</dt><dd>HLSL's warp-level ops: <code>WaveActiveSum</code>, <code>WaveReadLaneAt</code>, <code>WaveGetLaneIndex</code> — shuffles/ballots by another name. Vulkan/GLSL calls them subgroup operations.</dd></div>
+        <div><dt>Slang</dt><dd>Modular shading language (modules, generics, interfaces) that compiles to HLSL/DXIL, SPIR-V, Metal, and CUDA — one kernel source targeting many APIs.</dd></div>
+        <div><dt>Thread block clusters</dt><dd>Hopper+: groups of blocks co-scheduled on one GPC that can access each other's shared memory (distributed shared memory) and sync — a new tier between block and grid.</dd></div>
+        <div><dt>TMA (Tensor Memory Accelerator)</dt><dd>Hopper/Blackwell hardware engine for bulk asynchronous global↔shared tile copies — no threads or registers spent on address math; pairs with <code>cuda::barrier</code>/pipelines.</dd></div>
+        <div><dt>Blackwell (SM100/SM120)</dt><dd>Current NVIDIA generation (B200/GB200, RTX 50). Fifth-gen tensor cores add FP4/FP6 with microscaling formats; bigger L2; NVLink 5; data-center parts add dedicated tensor memory for MMA accumulators (<code>tcgen05</code> PTX).</dd></div>
+        <div><dt>Compute capability</dt><dd>NVIDIA's architecture version (Ampere 8.x, Ada 8.9, Hopper 9.0, Blackwell 10.x/12.x). Compile fat binaries with PTX fallback so kernels run — then re-tune — on newer parts.</dd></div>
+      </dl>
+
+      <h3 class="sub">Core concepts</h3>
+      <div class="term-grid">
+        <article class="term-card"><h3>One mental model, many spellings</h3><p>SIMT lanes grouped in warps, blocks with scratchpad and a barrier, a grid of independent blocks: CUDA, HIP, HLSL, GLSL, and Slang all expose exactly this. Learn the mapping table once and a tiled reduction ports across all five with renames. The genuinely portable skills are the invariants: coalescing, bank conflicts, occupancy, divergence — every vendor's profiler measures the same physics.</p></article>
+        <article class="term-card"><h3>The width trap</h3><p>The classic porting bug: warp-level code assuming 32 lanes (shuffle reductions, ballot masks, <code>tile[32]</code> arrays) silently breaks on CDNA's 64-wide wavefronts — half the data goes missing. Write <code>warpSize</code>-parameterized code, or template the width. Same trap in shaders: wave size varies by vendor (32/64) and Vulkan lets you query — never assume.</p></article>
+        <article class="term-card"><h3>Blackwell in one paragraph</h3><p>For an optimizer, Blackwell means: tensor cores now reach FP8 and FP4 (with per-block scaling factors — "microscaling") for inference throughput; TMA + clusters from Hopper remain the way to feed them; L2 keeps growing (tile accordingly); and on data-center parts, MMA accumulators move to dedicated tensor memory instead of registers. Practical takeaway: peak numbers assume tensor-core paths — a scalar-FP32 kernel leaves ~10× on the table on these parts.</p></article>
+        <article class="term-card"><h3>Optimizing without owning the algorithm</h3><p>The job description says it directly: improve kernels "without extensive background in the underlying algorithms." The method: treat the kernel as a memory-and-instruction stream — the profiler tells you traffic shapes, stall reasons, and pipe utilization without any domain knowledge. Preserve semantics with golden-output tests before touching anything; then every classified bottleneck has a fix that is algorithm-agnostic (layout, tiling, fusion, precision, launch shape).</p></article>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Concept</th><th>CUDA</th><th>HIP / AMD</th><th>HLSL (D3D12)</th><th>GLSL (Vulkan)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Thread group</td><td>thread block</td><td>block / work-group</td><td><code>[numthreads(x,y,z)]</code></td><td><code>local_size_*</code></td></tr>
+            <tr><td>Warp</td><td>warp (32)</td><td>wavefront (64 CDNA / 32 RDNA)</td><td>wave</td><td>subgroup</td></tr>
+            <tr><td>Scratchpad</td><td><code>__shared__</code></td><td><code>__shared__</code> (LDS)</td><td><code>groupshared</code></td><td><code>shared</code></td></tr>
+            <tr><td>Block barrier</td><td><code>__syncthreads()</code></td><td><code>__syncthreads()</code></td><td><code>GroupMemoryBarrierWithGroupSync()</code></td><td><code>barrier()</code></td></tr>
+            <tr><td>Warp reduce</td><td><code>__shfl_down_sync</code></td><td><code>__shfl_down</code></td><td><code>WaveActiveSum</code></td><td><code>subgroupAdd</code></td></tr>
+            <tr><td>Kernel profiler</td><td>Nsight Compute</td><td>rocprof / Omniperf</td><td>PIX</td><td>Radeon GPU Profiler / Nsight</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="link-list">
+        <a href="https://rocm.docs.amd.com/projects/HIP/en/latest/" target="_blank" rel="noopener">HIP documentation</a>
+        <a href="https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_porting_guide.html" target="_blank" rel="noopener">HIP porting guide</a>
+        <a href="https://shader-slang.org/" target="_blank" rel="noopener">Slang shading language</a>
+        <a href="https://microsoft.github.io/DirectX-Specs/d3d/HLSL_ShaderModel6_0.html" target="_blank" rel="noopener">HLSL wave intrinsics (SM6)</a>
+        <a href="https://docs.nvidia.com/cuda/blackwell-tuning-guide/" target="_blank" rel="noopener">Blackwell tuning guide</a>
+        <a href="https://docs.nvidia.com/cuda/hopper-tuning-guide/" target="_blank" rel="noopener">Hopper tuning guide (TMA, clusters)</a>
+      </div>
+
+      <h3 class="sub">Practice questions</h3>
+      <span class="sec-score" id="sec-score-port">Section score: 0 / 0</span>
+      <div class="quiz" data-section="port"></div>
+    </section>
+
+    <!-- ================= RESOURCES ================= -->
+    <section id="resources" class="section">
+      <h2>Resources &amp; Further Reading</h2>
+      <div class="source-grid">
+        <article class="course"><h3>Profiling</h3><p>The Nsight Compute Kernel Profiling Guide is the reference for every metric on this page; NVIDIA's GPU Performance Background explains the mental model behind them.</p><p><a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html" target="_blank" rel="noopener">Kernel Profiling Guide</a> | <a href="https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html" target="_blank" rel="noopener">GPU perf background</a></p></article>
+        <article class="course"><h3>CUDA</h3><p>The programming guide is the language reference; the best-practices guide is the optimization checklist (coalescing, occupancy, transfers) with worked examples.</p><p><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/" target="_blank" rel="noopener">Programming guide</a> | <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">Best practices</a></p></article>
+        <article class="course"><h3>Worked optimization examples</h3><p>Simon Boehm's SGEMM series walks one kernel from naive to near-cuBLAS through exactly the metrics-driven steps this assessment tests; CUTLASS shows the production version.</p><p><a href="https://siboehm.com/articles/22/CUDA-MMM" target="_blank" rel="noopener">SGEMM worklog</a> | <a href="https://github.com/NVIDIA/cutlass" target="_blank" rel="noopener">CUTLASS</a></p></article>
+        <article class="course"><h3>Portability</h3><p>HIP's porting guide covers the CUDA→AMD path including the wavefront-width trap; Slang documents the multi-target shader approach.</p><p><a href="https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_porting_guide.html" target="_blank" rel="noopener">HIP porting guide</a> | <a href="https://shader-slang.org/" target="_blank" rel="noopener">Slang</a></p></article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Plain HTML/CSS/JS, no dependencies, works offline. Styles shared with the Isaac Sim study hub.</p>
+  </footer>
+
+<script>
+const quizData = {
+  arch: [
+    {
+      q: "What is a warp on NVIDIA hardware?",
+      options: [
+        ["A fixed group of 32 threads that the SM schedules and issues instructions to as a unit", true],
+        ["All the threads of one thread block", false],
+        ["A group of blocks that share L2 cache", false],
+        ["One thread's stream of instructions", false]
+      ],
+      explain: "The hardware never issues per-thread: warp schedulers pick a resident 32-thread warp each cycle and issue its next instruction to all active lanes. This is why divergence, coalescing, and shuffle widths are all defined at warp granularity. AMD's equivalent is the wavefront (64 lanes on CDNA)."
+    },
+    {
+      q: "A kernel contains `if (threadIdx.x % 2 == 0) A(); else B();`. What actually executes?",
+      options: [
+        ["Every warp runs A with odd lanes masked, then B with even lanes masked — roughly the cost of A plus B", true],
+        ["Half the warps run A while the other half run B in parallel", false],
+        ["The hardware reorders threads so even threads form one warp and odd threads another", false],
+        ["The branch predictor picks the likely side and speculates", false]
+      ],
+      explain: "The condition splits every warp, so each warp serially executes both paths with non-participating lanes masked off — that's warp divergence. If the condition had been based on the warp index (threadIdx.x / 32), whole warps would take one side each and there would be no masking cost. GPUs don't reorder threads between warps or speculate branches."
+    },
+    {
+      q: "Why can't two blocks of the same kernel reliably communicate through global memory, with block 1 waiting for a flag block 0 sets?",
+      options: [
+        ["Blocks may run in any order or not concurrently, so block 1 can occupy the SMs first and spin forever on a flag block 0 never gets to set", true],
+        ["Blocks cannot access the same global memory addresses", false],
+        ["Global memory writes are discarded until the kernel finishes", false],
+        ["It works, as long as the flag is declared volatile", false]
+      ],
+      explain: "The programming model's contract is that blocks are independent: the scheduler may run them in any order and is not required to run them concurrently. If all SMs fill with waiting blocks, the producing block never launches — deadlock. Grid-wide ordering comes from separate kernel launches (ordered on a stream) or cooperative-groups grid sync, which requires a launch that guarantees co-residency."
+    },
+    {
+      q: "What is occupancy?",
+      options: [
+        ["Resident warps per SM as a fraction of the hardware maximum", true],
+        ["The percentage of SMs that received at least one block", false],
+        ["The fraction of peak FLOP/s the kernel achieves", false],
+        ["The ratio of active to idle threads within a warp", false]
+      ],
+      explain: "Occupancy = resident warps / maximum resident warps on an SM (e.g. 32 of 48 = 67%). It matters because latency hiding needs other warps ready to issue while some wait on memory. It is limited by per-thread registers, per-block shared memory, and block slots — and it's a means, not a goal: past the point where latency is hidden, more warps add nothing."
+    },
+    {
+      q: "An SM has 65,536 32-bit registers, a 2048-thread/64-warp maximum, and your kernel uses 128 registers per thread. What is the occupancy ceiling?",
+      options: [
+        ["25% — 65536/128 = 512 threads = 16 of 64 warps", true],
+        ["100% — registers don't limit occupancy", false],
+        ["50% — 1024 threads can fit", false],
+        ["12.5% — 256 threads can fit", false]
+      ],
+      explain: "Registers are allocated per thread for the thread's whole lifetime: 65536 / 128 = 512 resident threads = 16 warps out of a 64-warp maximum = 25%, no matter how you shape the blocks. This is the classic register-bound case: __launch_bounds__ or -maxrregcount can cap register use to fit more warps — but check ncu afterwards for spills to local memory."
+    },
+    {
+      q: "How does a GPU hide the ~500-cycle latency of a global memory load?",
+      options: [
+        ["The warp scheduler simply issues instructions from other resident warps while the loading warp waits", true],
+        ["Out-of-order execution reorders instructions within the thread", false],
+        ["A hardware prefetcher predicts and preloads the addresses", false],
+        ["It cannot — every load stalls the whole SM", false]
+      ],
+      explain: "GPUs replace the CPU's out-of-order machinery and prefetchers with massive multithreading: all resident warps keep their registers allocated, so switching warps costs nothing, and the scheduler picks any eligible warp each cycle. That's why occupancy and per-thread ILP matter — they determine whether an eligible warp exists when others are stalled."
+    },
+    {
+      q: "What happens if `__syncthreads()` is called inside a branch that only some threads of a block take?",
+      options: [
+        ["Undefined behavior — historically a hang, since the barrier waits for threads that never arrive", true],
+        ["The barrier only synchronizes the threads that reach it, which is usually what you want", false],
+        ["The compiler rejects the code", false],
+        ["Nothing — barriers are per-warp, so divergence is handled automatically", false]
+      ],
+      explain: "__syncthreads() is a block-wide barrier with the requirement that either all threads of the block reach it or none do. In a divergent branch some threads wait at the barrier for others that will never arrive — undefined behavior that classically deadlocks (post-Volta scheduling can turn it into silent corruption instead). The fix is to restructure so the barrier is outside the conditional."
+    },
+    {
+      q: "Why should a block size almost always be a multiple of 32?",
+      options: [
+        ["Blocks are carved into whole warps, so 100 threads still occupy 4 warps with 28 lanes permanently idle", true],
+        ["The compiler refuses non-multiple-of-32 block sizes", false],
+        ["Shared memory can only be allocated in 32-float units", false],
+        ["Because grids must contain a multiple of 32 blocks", false]
+      ],
+      explain: "The hardware allocates whole warps: a 100-thread block becomes 4 warps (128 lanes) with 28 lanes masked off in the last one — you pay their scheduling slots and registers for nothing. Non-multiples compile and run fine; they just waste ~1 warp per block. Typical good sizes are 128–512, chosen by occupancy math and then measured."
+    },
+    {
+      q: "Since Volta's independent thread scheduling, what must warp-level intrinsics like shuffles and ballots include?",
+      options: [
+        ["An explicit participation mask, using the _sync variants like __shfl_down_sync(0xffffffff, …)", true],
+        ["A __syncthreads() call immediately before each intrinsic", false],
+        ["Nothing new — the old __shfl forms are still correct everywhere", false],
+        ["A volatile qualifier on the exchanged variable", false]
+      ],
+      explain: "Volta gave each thread its own program counter, so lanes of a warp are no longer guaranteed to move in lockstep through divergent code. The _sync intrinsics take a mask naming which lanes participate and reconverge them before the exchange. The legacy unmasked forms are deprecated and can silently read stale values under divergence."
+    }
+  ],
+  mem: [
+    {
+      q: "A warp's 32 threads read consecutive 4-byte floats starting at a 128-byte-aligned address. What does the memory system move?",
+      options: [
+        ["One 128-byte request: four 32-byte sectors, every byte used", true],
+        ["32 separate 128-byte cache lines", false],
+        ["32 separate 4-byte transactions", false],
+        ["Two 64-byte transactions per thread", false]
+      ],
+      explain: "This is perfect coalescing: the coalescer merges the warp's addresses into sectors — 32 threads × 4 bytes = 128 bytes = 4 sectors, all fully used. The profiler shows it as ~4 sectors per request. Any scattering of the same 32 addresses moves more sectors for the same useful bytes, multiplying traffic."
+    },
+    {
+      q: "Threads read field .x from an array of structs `struct P { float x, y, z, w; }` (thread i reads p[i].x). Why is this slow, and what's the fix?",
+      options: [
+        ["Consecutive threads' addresses are 16 bytes apart, so 3/4 of every sector is wasted — switch to structure-of-arrays so x values are contiguous", true],
+        ["Struct members can't be cached — mark the struct __align__(16)", false],
+        ["The reads cause shared-memory bank conflicts — pad the struct", false],
+        ["float4 loads are illegal from global memory — load each field separately", false]
+      ],
+      explain: "With AoS, thread i's p[i].x is 16 bytes from thread i+1's — the warp touches 4× more sectors than it uses (16 sectors where 4 would do). SoA layout (separate x[], y[], z[], w[] arrays) makes warp-neighbor threads read memory-neighbor values: 4 sectors, fully used. AoS→SoA is the single most common layout fix in real kernels. (If the kernel uses all four fields together, loading the whole struct as one float4 is also fine.)"
+    },
+    {
+      q: "Compared to unit stride, how much memory traffic does a stride-2 float access pattern generate for the same useful data?",
+      options: [
+        ["2× — the warp touches twice as many sectors and uses half of each", true],
+        ["The same — the cache absorbs the difference", false],
+        ["32× — each thread gets its own transaction", false],
+        ["1.5× — only the last sector is wasted", false]
+      ],
+      explain: "Stride 2 spreads 32 four-byte reads over 256 bytes = 8 sectors, but only 128 bytes are used: 50% of every sector is waste, so effective bandwidth halves. Traffic scales with the stride until it saturates at 1 sector (or worse, 1 line) per thread. This is why transposes and column-major walks over row-major data need tiling through shared memory."
+    },
+    {
+      q: "Shared memory has 32 four-byte banks. When does a warp access cause a bank conflict?",
+      options: [
+        ["When two or more threads access different 4-byte words that map to the same bank — those accesses serialize", true],
+        ["Whenever two threads read the same address", false],
+        ["Any time threads access non-consecutive addresses", false],
+        ["Only when reading and writing the same bank in one instruction", false]
+      ],
+      explain: "Bank = (address / 4) % 32. Different words in the same bank must be served one per cycle — an N-way conflict costs N cycles. Same address is fine: that's a broadcast, served in one cycle. Non-consecutive is also fine as long as the words land in distinct banks — e.g. a stride-33 walk hits every bank exactly once, which is exactly why tiles get padded to [T][T+1]."
+    },
+    {
+      q: "A 32×32 shared-memory float tile is read column-wise (thread i reads tile[i][c]). What happens and what is the standard fix?",
+      options: [
+        ["All 32 threads hit the same bank (row stride 32 = bank-neutral), a 32-way conflict — declare the tile [32][33] to stagger the banks", true],
+        ["The reads fall out of cache — use __ldg() on the tile", false],
+        ["Nothing — shared memory has no penalty for column access", false],
+        ["The tile must be transposed in global memory first", false]
+      ],
+      explain: "Column elements are 32 floats apart, and 32 × 4 bytes is exactly one full trip around the 32 banks — every element of the column lives in the same bank, so the warp serializes 32 ways. Padding the row to 33 floats makes the column walk advance one bank per row: all 32 accesses hit different banks, one cycle. One wasted float per row buys a 32× speedup on that access."
+    },
+    {
+      q: "What is the difference in scope between L1 and L2 cache on a GPU?",
+      options: [
+        ["L1 is private to each SM; L2 is a single cache shared by all SMs and is the device's coherence point", true],
+        ["L1 is shared by all SMs; L2 is private per SM", false],
+        ["L1 caches only instructions; L2 caches only data", false],
+        ["They are the same cache viewed at different addresses", false]
+      ],
+      explain: "Each SM has its own L1 (physically unified with shared memory), while one large L2 (tens of MB on modern parts) sits in front of DRAM and serves the whole device — it's where inter-SM reuse pays off and where atomics resolve. This is why per-SM working sets tune against L1/shared sizes, while cross-block reuse (weights, LUTs) tunes against L2."
+    },
+    {
+      q: "Despite its name, where does CUDA 'local memory' physically live?",
+      options: [
+        ["In device DRAM (cached in L1/L2) — it's per-thread spill space, not a fast local store", true],
+        ["In a dedicated fast scratchpad next to each core", false],
+        ["In the register file", false],
+        ["In host memory, accessed over PCIe", false]
+      ],
+      explain: "'Local' refers to scope (per-thread), not speed: register spills and dynamically-indexed per-thread arrays are placed in device memory, cached in L1/L2, appearing as LDL/STL instructions in SASS. A register-pressure 'optimization' that triggers spills can therefore be a net loss — always check ncu's local-memory traffic after capping registers."
+    },
+    {
+      q: "What does switching a kernel's loads from one float to one float4 per thread accomplish?",
+      options: [
+        ["The same bytes move in 4× fewer, wider requests and instructions — less issue overhead and fuller memory pipelines; alignment to 16 bytes is required", true],
+        ["It quadruples the memory bandwidth of the GPU", false],
+        ["It halves the precision to gain speed", false],
+        ["Nothing — the coalescer already produces identical traffic", false]
+      ],
+      explain: "Vectorized 128-bit loads don't create bandwidth, but they cut the number of load instructions and warp-level requests 4×, which matters when the bottleneck is instruction issue or the LSU queue (ncu: LG Throttle stalls) — and they help the coalescer see fully-aligned 512-byte warp accesses. The pointer must be 16-byte aligned, and the tail of the array needs scalar handling."
+    },
+    {
+      q: "When is constant memory the right choice for kernel data?",
+      options: [
+        ["Small read-only data where all threads of a warp read the same address per access — e.g. filter coefficients, per-launch parameters", true],
+        ["Large arrays each thread indexes differently", false],
+        ["Data the kernel both reads and writes", false],
+        ["Anything under 4 MB", false]
+      ],
+      explain: "The constant cache is broadcast-optimized: one address per warp per cycle is free; 32 different addresses serialize 32 ways — worse than a plain global load. So constant memory suits uniform reads (coefficients, config), typically 64 KB total. Warp-divergent read-only indexing is better served by __ldg()/texture paths or ordinary loads through L1/L2."
+    },
+    {
+      q: "What does Ampere's cp.async (and Hopper/Blackwell's TMA) fundamentally change about loading a shared-memory tile?",
+      options: [
+        ["The global→shared copy no longer stages through registers and runs asynchronously, so it can overlap with compute (double buffering) instead of stalling threads", true],
+        ["Shared memory becomes as large as global memory", false],
+        ["It makes __syncthreads() unnecessary", false],
+        ["It compresses data in flight to double bandwidth", false]
+      ],
+      explain: "Classically each thread loads global→register→shared, burning registers and stalling on the load. cp.async writes global data straight into shared memory asynchronously; TMA goes further with a hardware engine that moves whole multidimensional tiles with no thread involvement. Both enable clean double-buffered pipelines (compute tile k while fetching tile k+1) synchronized with barriers/pipelines rather than stalls."
+    },
+    {
+      q: "Why does overlapping cudaMemcpyAsync with kernel execution require pinned (page-locked) host memory?",
+      options: [
+        ["The DMA engine needs pages that can't move; from pageable memory the driver must first copy through a staging buffer, which serializes and slows the transfer", true],
+        ["Pinned memory lives on the GPU, skipping PCIe entirely", false],
+        ["Pageable memory is read-only to the GPU driver", false],
+        ["It doesn't — async copies overlap from any allocation", false]
+      ],
+      explain: "The GPU's copy engine DMAs directly from physical pages, so they must be locked in place. With pageable memory the runtime stages through an internal pinned buffer — the 'async' call quietly becomes synchronous-ish and slower. cudaMallocHost/cudaHostAlloc + cudaMemcpyAsync on a non-default stream is the pattern that genuinely overlaps transfer with compute."
+    }
+  ],
+  prof: [
+    {
+      q: "Nsight Compute shows SM throughput 28% and memory throughput 31% of peak. What is the kernel?",
+      options: [
+        ["Latency-bound — neither resource is near its ceiling, so warps are mostly waiting; look at occupancy, ILP, and stall reasons", true],
+        ["Compute-bound — the SM number is listed first", false],
+        ["Memory-bound — memory is the higher of the two", false],
+        ["Perfectly balanced and finished", false]
+      ],
+      explain: "Both speed-of-light numbers low is the signature of latency limits: the SM idles between dependent operations because there aren't enough independent warps/instructions in flight. Which of the two low numbers is slightly higher is irrelevant. Fixes come from the latency column: more resident warps (occupancy), more elements per thread (ILP), removing divergence, serialization, or barrier waits — the stall breakdown says which."
+    },
+    {
+      q: "SOL shows memory 88%, SM 24%. What should you look at next?",
+      options: [
+        ["The Memory Workload Analysis chart, to find which level — DRAM, L2, L1, or shared — is the saturated one", true],
+        ["The occupancy section, to fit more warps", false],
+        ["Nothing — 88% means the kernel is done", false],
+        ["The instruction mix, to remove FP64 operations", false]
+      ],
+      explain: "Memory-bound is a family of diagnoses, not one: DRAM at peak wants less traffic (fusion, reuse, smaller types, coalescing); L2 at peak with quiet DRAM wants less redundant traffic or better block scheduling; L1/shared at peak wants bank-conflict and vectorization work. The memory chart in ncu shows bytes and utilization per level, so it names the actual wall. More occupancy wouldn't create bandwidth."
+    },
+    {
+      q: "What does L2 cache hit rate measure?",
+      options: [
+        ["The fraction of requests reaching L2 that are served from L2 rather than going out to DRAM", true],
+        ["The fraction of all loads that skip L1", false],
+        ["The percentage of L2 capacity the kernel uses", false],
+        ["The ratio of L2 bandwidth to DRAM bandwidth", false]
+      ],
+      explain: "L2 sees the misses from the L1s; its hit rate is how much of that traffic it absorbs instead of forwarding to DRAM. High hit rate = inter-SM or temporal reuse being captured on-chip. It says nothing about how much traffic there is — a kernel can have a 95% hit rate on traffic that shouldn't exist at all, or a 5% hit rate that is perfectly healthy (pure streaming)."
+    },
+    {
+      q: "A simple copy-transform kernel reads each input byte exactly once and shows a 3% L2 hit rate. What does this mean?",
+      options: [
+        ["Nothing is wrong — with zero data reuse there is nothing for L2 to hit; the metric is simply not informative for streaming kernels", true],
+        ["The kernel is broken and needs cache-blocking immediately", false],
+        ["The L2 is disabled and must be enabled with a compiler flag", false],
+        ["The measurement failed and should be repeated", false]
+      ],
+      explain: "Caches pay off on reuse. A streaming kernel touches each byte once, so nearly every access is a compulsory miss and the hit rate is inherently near zero — no fix exists or is needed; judge the kernel by DRAM throughput vs peak instead. This is exactly the 'know when a metric is not useful' skill the role asks for: quote the metric only where reuse is possible."
+    },
+    {
+      q: "A kernel shows a 92% L2 hit rate, but ncu reports L2 throughput at 95% of its maximum while DRAM sits at 15%. What's the right conclusion?",
+      options: [
+        ["The kernel is L2-bandwidth-bound: the cache is absorbing massive (likely redundant) traffic — reduce requests to L2, e.g. stage reuse in shared memory or registers", true],
+        ["The kernel is healthy because the hit rate is high", false],
+        ["DRAM is the bottleneck since its utilization is lowest", false],
+        ["The hit rate and throughput numbers contradict each other, so the profile is invalid", false]
+      ],
+      explain: "A high hit rate can hide a defect: every SM re-reading the same data hammers L2 even though DRAM stays quiet. L2 is a bandwidth resource too, and at 95% of peak it is the wall. The fix is to move the reuse closer — tile into shared memory or registers so the data is fetched from L2 once per block instead of once per warp-iteration. Hit rate answers 'is DRAM being spared?', throughput answers 'is L2 itself the limit?' — you need both."
+    },
+    {
+      q: "ncu reports ~31 sectors per request on a kernel's global loads of 4-byte values. What does this indicate?",
+      options: [
+        ["Nearly worst-case scattered access — each thread's address lands in its own 32-byte sector, so ~8× the useful bytes are moved; fix the data layout or indexing", true],
+        ["Ideal coalescing — higher is better", false],
+        ["The kernel uses vectorized float4 loads", false],
+        ["A shared-memory bank conflict", false]
+      ],
+      explain: "For 32-bit accesses the coalesced ideal is ~4 sectors (128 bytes) per 32-thread request; 31–32 means almost every lane pulled a separate sector and only 4 of each sector's 32 bytes were used. Typical causes: AoS layouts, transposed/column walks, hash-scattered indices. Fixes: SoA, tiling through shared memory, sorting/reordering work so warp-neighbors touch neighboring addresses."
+    },
+    {
+      q: "Theoretical occupancy is 75% but achieved occupancy is 19%. What kind of problem does this gap suggest?",
+      options: [
+        ["A runtime imbalance — too few blocks for the SM count, a tail wave, or very uneven work per block — rather than a register/shared-memory limit", true],
+        ["Register pressure — cut registers with __launch_bounds__", false],
+        ["The GPU is thermally throttling", false],
+        ["Shared memory per block is too large", false]
+      ],
+      explain: "Theoretical occupancy already accounts for registers and shared memory — that's the ceiling the launch could reach. Falling far below it at runtime means warps weren't there: a grid with fewer blocks than SM capacity, a long tail where most blocks finished, or wildly varying block durations. Fixes change the decomposition (more, smaller blocks; grid-stride loops; balanced work), not the resource budgets."
+    },
+    {
+      q: "The dominant warp stall reason is 'Long Scoreboard'. What are the warps waiting for?",
+      options: [
+        ["Data coming back from global/local memory loads — an L1/L2/DRAM-latency dependency", true],
+        ["The __syncthreads() barrier", false],
+        ["Free slots in the FP32 pipeline", false],
+        ["Shared-memory operations to complete", false]
+      ],
+      explain: "The long scoreboard tracks variable-latency operations — global/local memory. Dominant long-scoreboard stalls mean warps sit parked on load results: improve coalescing/caching so loads return faster, add ILP so each thread has other work between issue and use, or raise occupancy so other warps fill the wait. (Short Scoreboard is the same idea for shared memory; Barrier is __syncthreads.)"
+    },
+    {
+      q: "Stall analysis shows warps spending most cycles at 'Barrier'. What is the typical cause and fix?",
+      options: [
+        ["Uneven work between __syncthreads() points — threads that finish early wait for stragglers; balance the work or use smaller blocks so less waits at each barrier", true],
+        ["The kernel calls __syncthreads() from divergent code — remove all barriers", false],
+        ["Global memory is saturated — reduce DRAM traffic", false],
+        ["Too many registers per thread — cap them", false]
+      ],
+      explain: "Barrier stalls measure time parked at block-wide syncs. Common causes: one warp doing a serial section (e.g. warp 0 reduces while 31 warps wait), imbalanced per-thread loops, or huge blocks where the slowest warp gates hundreds of threads. Fixes: distribute the serial part (warp-level primitives), balance the loop bounds, shrink blocks, or restructure so fewer barriers are needed."
+    },
+    {
+      q: "A healthy, fast kernel shows a large fraction of 'Not Selected' stall cycles. Should you fix it?",
+      options: [
+        ["No — Not Selected means the warp was ready but the scheduler issued another eligible warp; it's evidence of surplus parallelism, not a problem", true],
+        ["Yes — it means warps are being starved and occupancy must be raised", false],
+        ["Yes — the scheduler is misconfigured and needs a different block size", false],
+        ["No, but only because the metric cannot be measured reliably", false]
+      ],
+      explain: "Each scheduler issues at most one instruction per cycle; when several warps are eligible, the extras record 'Not Selected'. That's the latency-hiding machine working as designed — plenty of ready work. Chasing it would be optimizing a non-problem: the actionable stalls are the waiting kinds (Long/Short Scoreboard, Barrier, Throttle). Another 'when a metric isn't useful' case."
+    },
+    {
+      q: "A memory-bound kernel runs DRAM at 91% of peak with ~4 sectors/request. A colleague suggests raising occupancy from 50% to 75%. What's the expected result?",
+      options: [
+        ["Essentially nothing — bandwidth is already saturated with efficient access; only moving fewer bytes (fusion, reuse, smaller types) can speed this kernel up", true],
+        ["A proportional ~1.5× speedup", false],
+        ["A large win, since occupancy multiplies bandwidth", false],
+        ["A slowdown, because occupancy always hurts memory-bound kernels", false]
+      ],
+      explain: "Occupancy buys latency hiding — useful when the memory system is underutilized because requests arrive too slowly. Here the pipe is already 91% full with well-coalesced traffic: more warps just queue more requests behind the same wall. The kernel is effectively done unless the algorithm can move fewer bytes: fuse with neighbors, cache reuse in shared memory, or shrink the datatype. Knowing when occupancy is irrelevant is exactly the documented-reasoning skill this role tests."
+    },
+    {
+      q: "A kernel reads 1.2 GB and writes 0.4 GB in 4.0 ms on a GPU with 1.6 TB/s peak DRAM bandwidth. What do you conclude?",
+      options: [
+        ["Effective bandwidth is 400 GB/s — about 25% of peak, so there's likely 3–4× available from access patterns or latency fixes", true],
+        ["The kernel exceeds peak bandwidth, so the timing is wrong", false],
+        ["Effective bandwidth is 1.6 TB/s — the kernel is optimal", false],
+        ["Nothing — bandwidth cannot be computed without the FLOP count", false]
+      ],
+      explain: "(1.2 + 0.4) GB / 0.004 s = 400 GB/s = 25% of the 1.6 TB/s roof. A supposedly memory-bound kernel far from the roof means wasted sectors (check sectors/request), latency limits (check occupancy/ILP and stalls), or serialization. If the same kernel measured ~1.4 TB/s, it would be near the roof and only algorithmic traffic reduction would remain. This two-line calculation frames every memory optimization conversation."
+    },
+    {
+      q: "On a roofline plot a kernel sits well left of the ridge point, on the sloped bandwidth line. What is the only class of change that can raise its FLOP/s?",
+      options: [
+        ["Raising arithmetic intensity — more reuse per byte moved (tiling, fusion, smaller types), which shifts the kernel right toward the compute roof", true],
+        ["Increasing clock speeds by overclocking the SMs", false],
+        ["Switching the math to tensor cores", false],
+        ["Launching with more blocks", false]
+      ],
+      explain: "Left of the ridge, attainable FLOP/s = AI × bandwidth: the memory system feeds the ALUs too slowly for them to matter. Faster math units (tensor cores) raise a roof the kernel can't touch. Only doing more work per byte — data reuse via tiling, fusing producer/consumer kernels, or halving byte counts with FP16 — moves it right. SAXPY at ~0.17 FLOP/byte is the textbook prisoner of the slope."
+    },
+    {
+      q: "Why profile with Nsight Systems before Nsight Compute?",
+      options: [
+        ["nsys shows the whole timeline — which kernels, copies, or CPU gaps actually dominate wall time — so ncu's deep dive lands on the kernel that matters (Amdahl)", true],
+        ["ncu cannot run unless nsys has generated a report first", false],
+        ["nsys measures the same counters with less overhead", false],
+        ["ncu only works on kernels shorter than one millisecond", false]
+      ],
+      explain: "A kernel that is 8% of the timeline caps its best-case win at 8%; meanwhile the real problem may be H2D copies or gaps where the GPU waits on CPU work — invisible in a per-kernel profile. The workflow is: nsys for where time goes → ncu on the dominant kernel for why → fix → re-run nsys, because the bottleneck moves after each fix."
+    }
+  ],
+  opt: [
+    {
+      q: "Why does staging tiles of A and B into shared memory make matrix multiply so much faster?",
+      options: [
+        ["Each global element is loaded once per tile and reused T times from fast on-chip memory, raising arithmetic intensity from memory-bound to compute-bound territory", true],
+        ["Shared memory has higher total bandwidth than registers", false],
+        ["It reduces the number of floating-point operations required", false],
+        ["It lets different blocks share their loaded data with each other", false]
+      ],
+      explain: "Naive matmul reads each input element from global memory once per use — O(N) times overall. Tiling loads a T×T tile once (coalesced), then every element serves T multiply-adds from ~20-cycle shared memory. Bytes from DRAM drop by a factor of T, so AI rises ~T/4 FLOP/byte and the kernel climbs the roofline. The FLOP count is unchanged; only the traffic shrinks. (Blocks still can't share tiles — shared memory is per block.)"
+    },
+    {
+      q: "In the tiled-matmul loop, why is there a second __syncthreads() after the compute phase, before the next iteration?",
+      options: [
+        ["To stop fast threads from overwriting the tile with the next iteration's data while slower threads are still reading the current tile", true],
+        ["To flush shared memory back to global memory", false],
+        ["Because __syncthreads() must always be called in pairs", false],
+        ["To reset the warp scheduler between tiles", false]
+      ],
+      explain: "Barrier #1 ensures the tile is fully loaded before anyone computes with it. Barrier #2 ensures everyone has finished computing before anyone reloads the buffer. Omit it and a warp that finishes its dot-product slice early begins loading tile k+1 over data other warps are still reading — a classic intermittent-wrong-answer race. (Double buffering removes barrier #2 by alternating between two tiles.)"
+    },
+    {
+      q: "Three consecutive elementwise kernels each read and write the same N-element array. What does fusing them into one kernel save?",
+      options: [
+        ["Two full DRAM round trips of intermediates (plus two launch overheads) — values stay in registers between the fused stages", true],
+        ["Two thirds of the arithmetic operations", false],
+        ["Nothing, since the same total work still happens", false],
+        ["Shared memory, which no longer needs to be allocated", false]
+      ],
+      explain: "Elementwise chains are pure bandwidth: each stage pays a read and a write of N elements. Fused, the value is loaded once, transformed three times in registers, stored once — traffic drops from 6N to 2N accesses (3× for the chain), with launch overhead savings on top. Fusion is the highest-leverage fix for memory-bound pipelines, which is why compilers (XLA, torch.compile) fight for it."
+    },
+    {
+      q: "What makes a grid-stride loop preferable to assuming one thread per element?",
+      options: [
+        ["The kernel handles any problem size with any launch shape, and each thread processing several elements adds ILP and amortizes setup cost", true],
+        ["It removes the need for bounds checking", false],
+        ["It guarantees 100% occupancy automatically", false],
+        ["The compiler vectorizes it into float4 loads automatically", false]
+      ],
+      explain: "for (i = tid; i < n; i += gridDim.x * blockDim.x) decouples grid size from n: launch a grid sized to fill the machine (e.g. a few blocks per SM) and let threads loop. Benefits: no oversized grids, correct for any n (the loop condition is the bounds check for full iterations — though the classic guard remains), per-thread ILP from multiple elements, and easy tuning/debugging (launch one block, it still works)."
+    },
+    {
+      q: "How does __shfl_down_sync speed up the last steps of a block reduction?",
+      options: [
+        ["Lanes exchange values register-to-register within the warp — no shared-memory traffic and no __syncthreads() for the final 5 halving steps", true],
+        ["It performs the addition in a dedicated reduction unit", false],
+        ["It broadcasts the final sum to all blocks", false],
+        ["It sorts the values so additions become associative", false]
+      ],
+      explain: "Once a reduction is down to one warp (32 values), shuffles finish it: v += __shfl_down_sync(0xffffffff, v, 16/8/4/2/1) — five register exchanges with no barrier, since warp lanes are synchronized by the mask. The pattern: block tree-reduce in shared memory to 32 (or one value per warp), then shuffle. CUB's BlockReduce wraps exactly this and is the production answer."
+    },
+    {
+      q: "A histogram kernel where all threads atomicAdd into one 256-bin global array is slow. What is the standard fix?",
+      options: [
+        ["Privatization — each block accumulates into its own shared-memory histogram, then atomically merges the 256 bins into the global one once at the end", true],
+        ["Replace atomicAdd with normal additions since collisions are rare", false],
+        ["Sort the entire input on the host first", false],
+        ["Use one thread to compute the whole histogram serially", false]
+      ],
+      explain: "Thousands of threads hammering 256 global addresses serialize at L2 — atomics to the same address are a queue, not parallel work. Privatized per-block copies in shared memory make collisions block-local and cheap (shared-memory atomics are fast), and the final merge costs only 256 global atomics per block. Same recipe for any contended accumulator; the extreme version privatizes per warp or per thread. Removing normal atomics where collisions 'seem rare' is simply a data race."
+    },
+    {
+      q: "Why do high-performance kernels pass tile sizes as template parameters instead of runtime arguments?",
+      options: [
+        ["Compile-time constants let shared arrays be statically sized, loops fully unroll, and per-thread arrays live in registers — none of which works with runtime values", true],
+        ["Template parameters are stored in faster memory than function arguments", false],
+        ["It's purely a code-style convention with no performance effect", false],
+        ["Runtime integers can't be passed to __global__ functions", false]
+      ],
+      explain: "`__shared__ float t[T][T+1]` needs T at compile time; `#pragma unroll` fully unrolls only known trip counts; and an unrolled per-thread array becomes registers instead of local memory. So kernels are written as template<int TILE> and the host dispatches over a closed set of instantiations. This is the engine inside CUTLASS/CUB — and pairs with C++17 `if constexpr` for variant behavior."
+    },
+    {
+      q: "You cap registers with __launch_bounds__ to raise occupancy from 25% to 50%, and the kernel gets slower. What most likely happened?",
+      options: [
+        ["The cap forced register spills to local memory — the added DRAM/L1 spill traffic cost more than the extra latency hiding gained", true],
+        ["Higher occupancy always reduces performance", false],
+        ["__launch_bounds__ disables L2 caching", false],
+        ["The extra warps overheated the SM and it throttled", false]
+      ],
+      explain: "Registers the kernel genuinely needs don't disappear — they spill to per-thread local memory (DRAM-backed, L1/L2-cached), turning register reads into memory instructions (LDL/STL). If the kernel wasn't latency-bound, or the spills hit hot loops, the trade loses. Check ncu: local memory traffic and executed-instruction counts before/after. Occupancy tuning is an experiment to be measured, never a free win."
+    },
+    {
+      q: "What do tensor cores actually compute, and what is the standard precision arrangement for ML workloads?",
+      options: [
+        ["Small matrix-tile multiply-accumulate operations (D = A×B + C) per instruction, typically with FP16/BF16/FP8 inputs and FP32 accumulation", true],
+        ["Arbitrary scalar FP operations, just faster than CUDA cores", false],
+        ["Only convolutions, with fixed 3×3 filters", false],
+        ["Integer-only dot products for quantized inference", false]
+      ],
+      explain: "A tensor core instruction (wmma/mma, tcgen05 on Blackwell) multiplies small tiles — e.g. 16×16 fragments — in one go, giving order-of-magnitude higher matrix throughput than scalar FMA pipes. Inputs are low precision (FP16/BF16/TF32/FP8, FP4 on Blackwell), accumulation is FP32 to preserve accuracy. In practice you reach them through cuBLAS/cuDNN/CUTLASS; hand-written mma kernels are for when those don't fit."
+    },
+    {
+      q: "When is inline PTX (asm volatile) a legitimate tool in a kernel?",
+      options: [
+        ["When you need an instruction or exact behavior the compiler won't emit from C++ — special instructions, precise memory-op variants — and you document why; it's a last resort after intrinsics", true],
+        ["Whenever you want any loop to run faster", false],
+        ["As the standard way to call cuBLAS from a kernel", false],
+        ["Never — PTX cannot be embedded in CUDA C++", false]
+      ],
+      explain: "Most 'fast' instructions have C++ intrinsics (__shfl_down_sync, __ldg, fmaf) — use those first: the compiler understands them and optimizes around them. Inline PTX is for the residue: cache-hint load/store variants, new-architecture instructions before intrinsics exist (early mma/cp.async/tcgen05), or precise control the optimizer refuses. Costs: portability, readability, and the optimizer treating the asm as a black box — hence 'document why', which this role explicitly asks for."
+    },
+    {
+      q: "What's the practical difference between Thrust and CUB?",
+      options: [
+        ["Thrust offers host-callable device-wide algorithms (sort, reduce, scan) for whole arrays; CUB additionally provides warp/block-level primitives you compose inside your own kernels", true],
+        ["CUB is the deprecated predecessor of Thrust", false],
+        ["Thrust is for AMD GPUs, CUB for NVIDIA", false],
+        ["They are unrelated: CUB is a debugger, Thrust a profiler", false]
+      ],
+      explain: "Both live in CCCL. Thrust looks like the STL: thrust::sort(thrust::device, …) from host code — quick, tuned, whole-array. CUB's device-wide algorithms are similar (with explicit temp storage), but its unique value is BlockReduce/BlockScan/WarpReduce etc. — architecture-tuned building blocks for inside custom kernels, e.g. fusing a reduction into your own pipeline instead of launching a separate pass. libcu++ rounds it out with cuda::std atomics/barriers/pipelines."
+    },
+    {
+      q: "In a double-buffered kernel using cp.async, what is being overlapped?",
+      options: [
+        ["The asynchronous global→shared load of tile k+1 with the computation on tile k, so steady-state memory latency hides behind math", true],
+        ["Two kernels from different streams within one SM", false],
+        ["Host-to-device PCIe copies with device-to-host copies", false],
+        ["Integer and floating-point pipelines within one warp", false]
+      ],
+      explain: "With one buffer the block alternates: load (SM waits) → compute → load… Double buffering issues the async copy for the next tile, computes on the current one, then waits only on the copy's barrier — in steady state loads are fully hidden if compute per tile ≥ load time. cp.async (Ampere) made this cheap by skipping register staging; TMA (Hopper/Blackwell) moves whole tiles with dedicated hardware. This is the backbone of modern GEMM pipelines."
+    }
+  ],
+  cpp: [
+    {
+      q: "In a template kernel, how does `if constexpr (UseBias) { … }` differ from a regular `if` with a compile-time-constant condition?",
+      options: [
+        ["The false branch is discarded at instantiation — it is never compiled for that instantiation and (if dependent) may even contain code that would be invalid for those template arguments", true],
+        ["It compiles both branches but adds a hint for the branch predictor", false],
+        ["It is evaluated at runtime but faster than a normal if", false],
+        ["There is no difference beyond style", false]
+      ],
+      explain: "A regular if with constant condition is usually optimized away too, but both branches must still compile — so a branch calling T::bias() breaks instantiations without it. if constexpr discards the dead branch before that check (for dependent code), enabling one kernel body to serve many configurations without specialization boilerplate. In kernels this also guarantees no registers or instructions are spent on disabled features."
+    },
+    {
+      q: "Why does `__shared__ float tile[T][T+1];` require T to be a template (or constexpr) parameter rather than a normal function argument?",
+      options: [
+        ["Static shared-memory arrays need compile-time sizes — a runtime T would require dynamically-sized shared memory declared via the extern pattern instead", true],
+        ["Shared memory only exists in templated kernels", false],
+        ["Function arguments cannot be integers in device code", false],
+        ["It doesn't — CUDA allows variable-length arrays everywhere", false]
+      ],
+      explain: "Array bounds are types in C++ — they must be compile-time constants. With a runtime size you'd fall back to `extern __shared__ float smem[];` plus a size in the launch config and manual index math, losing 2D indexing and some optimizer knowledge (unrolling, bank-conflict-free padding). Template non-type parameters give the best of both: 'runtime' configurability via a dispatch over instantiations, compile-time constants inside."
+    },
+    {
+      q: "What does C++17's `constexpr` machinery give you in CUDA device code?",
+      options: [
+        ["Functions and values computed at compile time (lookup tables, index math, config), usable from device code — with --expt-relaxed-constexpr even calling host constexpr functions", true],
+        ["A way to run kernels at compile time", false],
+        ["Automatic caching of function results at runtime", false],
+        ["Nothing — constexpr is host-only", false]
+      ],
+      explain: "constexpr erases work from the kernel entirely: precomputed twiddle tables, derived tile geometry, static_assert-checked configurations. A constexpr function needs no __device__ annotation to be used in constant expressions, and nvcc's --expt-relaxed-constexpr flag lets device code call ordinary host constexpr functions (much of <cmath>-style logic). Combined with templates it's how kernel libraries compute everything computable before the GPU ever runs."
+    },
+    {
+      q: "Which is a correct C++17 structured binding?",
+      options: [
+        ["auto [lo, hi] = std::minmax_element(v.begin(), v.end());", true],
+        ["auto (lo, hi) = std::minmax_element(v.begin(), v.end());", false],
+        ["std::tie{lo, hi} = std::minmax_element(v.begin(), v.end());", false],
+        ["auto lo, hi = std::minmax_element(v.begin(), v.end());", false]
+      ],
+      explain: "Structured bindings use square brackets: auto [a, b] = expr; unpacking pairs, tuples, arrays, and plain structs into named variables — no pre-declared variables or std::tie (the pre-17 workaround, which also uses parentheses and assignment semantics). Host-side CUDA code uses this constantly for pair-returning APIs like minmax, equal_range, or occupancy queries."
+    },
+    {
+      q: "What advantage does std::string_view give over const std::string& for read-only parameters?",
+      options: [
+        ["It's a non-owning pointer+length view: string literals and substrings bind without allocating or copying, and slicing is O(1)", true],
+        ["It automatically interns strings for faster comparison", false],
+        ["It is mutable, unlike const references", false],
+        ["It null-terminates substrings for C APIs", false]
+      ],
+      explain: "Passing a literal to const std::string& constructs a temporary std::string (allocation); substr() on a string copies. string_view wraps existing characters — any source, zero allocation, remove_prefix/substr in O(1). Caveats: it doesn't own (don't outlive the source) and isn't guaranteed null-terminated (don't hand .data() to C APIs expecting termination). Ideal for parsing kernel configs, CLI args, and log processing in host harness code."
+    },
+    {
+      q: "A lookup function may find no result. The most expressive C++17 signature is:",
+      options: [
+        ["std::optional<Value> find(Key k) — empty means not found, no sentinel values or output parameters", true],
+        ["Value find(Key k) returning -1 when absent", false],
+        ["bool find(Key k, Value* out)", false],
+        ["Value* find(Key k) returning a pointer into internal storage", false]
+      ],
+      explain: "optional makes 'maybe absent' part of the type: callers must check (has_value()/if (auto v = find(k))) and can't confuse a sentinel with real data (-1 may be a legitimate value). The bool+out-param form works but reads poorly and resists composition (value_or, chaining). Raw pointers conflate absence with lifetime questions. Same reasoning powers std::variant for type-safe unions — C++17's vocabulary types the role expects fluency in."
+    },
+    {
+      q: "What does the C++17 fold expression `return (args + ...);` do in a variadic template?",
+      options: [
+        ["Expands the parameter pack with + between elements — the sum of all arguments, without writing a recursive base case", true],
+        ["Adds each argument to a global accumulator", false],
+        ["Concatenates the arguments' types into a tuple", false],
+        ["It's a syntax error — folds only work with &&", false]
+      ],
+      explain: "Pre-17 variadic reduction needed recursion: sum(T first, Rest... rest) plus a base case. A fold expression collapses that to one line and works with most binary operators: (args && ...) for all-of, ((f(args)), ...) to call f on each. In kernel-adjacent code it shows up in variadic dimension math and compile-time config validation — anywhere a parameter pack must be reduced."
+    },
+    {
+      q: "Why must a lambda passed to a CUDA kernel capture host variables by value, not by reference?",
+      options: [
+        ["A by-reference capture stores a pointer to host stack memory, which is meaningless on the device — the lambda must carry copies (and device pointers for buffers)", true],
+        ["Reference captures are slower to copy to the GPU", false],
+        ["nvcc silently converts reference captures to value captures", false],
+        ["Lambdas cannot be used in device code at all", false]
+      ],
+      explain: "The lambda object is copied to the device like any kernel argument; a [&] capture embeds host addresses that the GPU either can't dereference or reads as garbage. Correct: capture scalars by value and pass device pointers explicitly — [=, d_ptr] style — with nvcc's --extended-lambda enabling __device__ lambdas. It's the same rule as all kernel arguments: value semantics at the host/device boundary, pointers only if they point to device memory."
+    }
+  ],
+  port: [
+    {
+      q: "A CUDA warp-shuffle reduction hardcoding 32 lanes is ported to an AMD MI-series (CDNA) GPU with HIP. What happens?",
+      options: [
+        ["It silently computes wrong results — CDNA wavefronts are 64 lanes, so a 32-wide shuffle tree only reduces half the wavefront; use warpSize or template the width", true],
+        ["It works unchanged, since HIP emulates 32-lane warps", false],
+        ["It fails to compile until renamed to __shfl_down_hip", false],
+        ["It runs at exactly half speed but produces correct results", false]
+      ],
+      explain: "The width trap is the classic porting bug: masks like 0xffffffff, loops 'for (offset = 16; …)', and smem[32] arrays all bake in 32. On 64-lane CDNA wavefronts the reduction tree stops halfway — results are wrong, not slow. Portable code parameterizes on warpSize (or a compile-time WAVE_SIZE), sizes scratch arrays accordingly, and uses full-wavefront masks. RDNA (gaming) parts are 32-wide, which hides the bug until the MI-series deployment."
+    },
+    {
+      q: "What does the hipify tooling do?",
+      options: [
+        ["Source-to-source translates CUDA to HIP — cudaMalloc→hipMalloc, kernel syntax preserved — leaving most code ready to compile for both AMD and NVIDIA", true],
+        ["It converts compiled NVIDIA binaries to run on AMD GPUs", false],
+        ["It emulates HIP kernels on the CPU for debugging", false],
+        ["It profiles CUDA kernels on AMD hardware", false]
+      ],
+      explain: "hipify-perl/hipify-clang rewrite API calls and headers; the kernel language and <<<>>> launches are already shared. HIP then compiles via ROCm for AMD or falls through to CUDA for NVIDIA — one codebase, two vendors. What the tools can't fix is semantic width assumptions (wavefront 64), inline PTX, and NVIDIA-only library calls (cuBLAS→hipBLAS/rocBLAS is a mostly-mechanical rename)."
+    },
+    {
+      q: "Which HLSL compute-shader construct corresponds to CUDA's __shared__ memory plus __syncthreads()?",
+      options: [
+        ["groupshared variables plus GroupMemoryBarrierWithGroupSync()", true],
+        ["cbuffer plus DeviceMemoryBarrier()", false],
+        ["RWStructuredBuffer plus WaveBarrier()", false],
+        ["static variables plus AllMemoryBarrier()", false]
+      ],
+      explain: "The compute model maps directly: [numthreads(x,y,z)] = block dims, SV_GroupThreadID = threadIdx, SV_DispatchThreadID = global index, groupshared = shared memory, GroupMemoryBarrierWithGroupSync = __syncthreads. Warp-level ops arrived in Shader Model 6 as wave intrinsics (WaveActiveSum ≈ shuffle reduction, WaveGetLaneIndex ≈ lane id). A tiled reduction ports between CUDA and HLSL as renames — the optimization reasoning is identical."
+    },
+    {
+      q: "What is Slang?",
+      options: [
+        ["A modular shading language (generics, interfaces, modules) that compiles one source to multiple targets — HLSL/DXIL, SPIR-V, Metal, and CUDA", true],
+        ["NVIDIA's proprietary replacement for PTX assembly", false],
+        ["A Python DSL that generates CUDA kernels", false],
+        ["The scripting language inside Nsight Compute", false]
+      ],
+      explain: "Slang (now hosted by Khronos) extends HLSL-style shading with real modularity — generics with interfaces instead of preprocessor #ifdef forests — and cross-compiles to the major GPU APIs plus CUDA, with automatic differentiation for graphics-ML work. The job listing groups it with CUDA/HIP/HLSL/GLSL because the kernel-optimization mindset (occupancy, memory shapes, wave ops) applies unchanged across all of them."
+    },
+    {
+      q: "What new tensor-core capability does the Blackwell generation add for inference throughput?",
+      options: [
+        ["FP4 (and FP6) input precision with microscaling — per-block scale factors that keep tiny formats accurate, roughly doubling throughput again over FP8", true],
+        ["FP128 quad precision for scientific computing", false],
+        ["Running tensor cores directly on host memory over PCIe", false],
+        ["Tensor cores that execute arbitrary branching code", false]
+      ],
+      explain: "Each generation halves the practical precision: Volta FP16 → Ampere TF32/BF16 → Hopper FP8 → Blackwell FP4/FP6 with microscaling block formats (shared per-block exponents/scales that preserve dynamic range at 4 bits). Accumulation stays higher precision. For an optimizer the takeaway is that Blackwell peak numbers assume these paths — and data-center Blackwell moves MMA accumulation into dedicated tensor memory (tcgen05 PTX) rather than registers."
+    },
+    {
+      q: "What problem does the TMA (Tensor Memory Accelerator, Hopper/Blackwell) solve in tile-based kernels?",
+      options: [
+        ["Bulk async global↔shared tile transfers run on a dedicated engine — threads no longer spend registers and instructions on address math and staging, freeing them for compute", true],
+        ["It doubles DRAM bandwidth by compressing tiles", false],
+        ["It removes the need for shared memory entirely", false],
+        ["It automatically fuses consecutive kernels", false]
+      ],
+      explain: "Pre-Hopper, feeding tensor cores meant warps doing address arithmetic and cp.async issue for every tile — instructions and registers stolen from math. A TMA descriptor describes the multidimensional tile once; the engine then moves whole tiles asynchronously, completing against an mbarrier, while warps compute. Combined with thread block clusters (blocks sharing distributed shared memory), it's how Hopper/Blackwell GEMM pipelines keep tensor cores saturated — and vendor libraries use it for you."
+    }
+  ]
+};
+
+const state = {};
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text) node.textContent = text;
+  return node;
+}
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function totals() {
+  let answered = 0, correct = 0, total = 0;
+  for (const key of Object.keys(state)) {
+    answered += state[key].answered;
+    correct += state[key].correct;
+    total += state[key].total;
+  }
+  return { answered, correct, total };
+}
+
+function updateScore() {
+  const t = totals();
+  document.getElementById("score-text").textContent = `Score: ${t.correct} / ${t.answered}`;
+  document.getElementById("score-note").textContent =
+    t.answered === t.total
+      ? `Done! ${t.correct} of ${t.total} correct (${Math.round(100 * t.correct / t.total)}%). Retry to reshuffle questions and options.`
+      : `${t.total - t.answered} of ${t.total} questions remaining across 6 sections.`;
+  for (const key of Object.keys(state)) {
+    const s = state[key];
+    const elScore = document.getElementById(`sec-score-${key}`);
+    if (elScore) {
+      elScore.textContent = s.answered === s.total
+        ? `Section score: ${s.correct} / ${s.total} (${Math.round(100 * s.correct / s.total)}%)`
+        : `Section score: ${s.correct} / ${s.answered} — ${s.total - s.answered} left`;
+    }
+  }
+}
+
+function renderQuestion(container, item, number, sectionKey) {
+  const card = el("article", "quiz-card");
+  card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
+  const optionsBox = el("div", "options");
+  const explain = el("div", "explain");
+  explain.appendChild(document.createTextNode(item.explain));
+
+  const buttons = [];
+  for (const [text, isCorrect] of shuffle(item.options)) {
+    const btn = el("button", "", text);
+    btn.type = "button";
+    btn.dataset.correct = isCorrect ? "1" : "0";
+    btn.addEventListener("click", () => {
+      state[sectionKey].answered += 1;
+      if (isCorrect) state[sectionKey].correct += 1;
+      for (const b of buttons) {
+        b.disabled = true;
+        if (b.dataset.correct === "1") b.classList.add("correct");
+      }
+      if (!isCorrect) btn.classList.add("incorrect");
+      const verdict = el("span", "verdict " + (isCorrect ? "good" : "bad"), isCorrect ? "Correct. " : "Incorrect. ");
+      explain.insertBefore(verdict, explain.firstChild);
+      explain.classList.add("show");
+      updateScore();
+    });
+    buttons.push(btn);
+    optionsBox.appendChild(btn);
+  }
+
+  card.appendChild(optionsBox);
+  card.appendChild(explain);
+  container.appendChild(card);
+}
+
+function renderAll() {
+  for (const quizBox of document.querySelectorAll(".quiz")) {
+    const key = quizBox.dataset.section;
+    state[key] = { answered: 0, correct: 0, total: 0 };
+    quizBox.innerHTML = "";
+    const items = shuffle(quizData[key]);
+    items.forEach((item, i) => {
+      state[key].total += 1;
+      renderQuestion(quizBox, item, i + 1, key);
+    });
+  }
+  updateScore();
+}
+
+const toggleBtn = document.getElementById("toggle-explain");
+toggleBtn.addEventListener("click", () => {
+  const on = document.getElementById("main").classList.toggle("show-all");
+  toggleBtn.textContent = on ? "Hide explanations" : "Show all explanations";
+});
+
+document.getElementById("retry").addEventListener("click", renderAll);
+renderAll();
+</script>
+</body>
+</html>
