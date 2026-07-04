@@ -45,6 +45,7 @@
     .order-item .num { font-weight:700; color:var(--accent-strong); }
     .order-item.good { border-color:var(--accent-strong); font-weight:700; }
     .order-item.bad { border-color:var(--warn); background:var(--warn-soft); }
+    .qpre { margin:0 0 10px; padding:12px 14px; overflow-x:auto; background:var(--bg); border:1px solid var(--line); border-radius:6px; font-family:Consolas,Menlo,monospace; font-size:13px; line-height:1.5; color:var(--text); }
     .explain { display:none; margin:10px 0 0; padding:10px 12px; border-left:3px solid var(--accent); background:var(--accent-soft); border-radius:0 6px 6px 0; color:var(--text); }
     .explain.show { display:block; }
     .show-all .explain { display:block; }
@@ -74,6 +75,7 @@
       <a href="#opt">Techniques</a>
       <a href="#cpp">C++17</a>
       <a href="#port">Portability</a>
+      <a href="#case">Cases</a>
     </nav>
   </header>
 
@@ -86,7 +88,9 @@
         occupancy, L2 hit rate and throughput, sectors per request, warp-stall reasons), classify the
         bottleneck, apply the matching fix, and be able to say when a metric is <em>not</em> telling you
         anything. Six sections cover the machine model, the memory system, the profiler, the optimization
-        playbook, C++17, and portability across CUDA/HIP/shader models. Difficulty runs from recall up to
+        playbook, C++17, and portability across CUDA/HIP/shader models; a seventh drills it all as
+        principal-level case studies — full profiler-report diagnosis, spot-the-bug reviews of unfamiliar
+        kernels, and the judgment calls (when to push back, when to stop). Difficulty runs from recall up to
         applied reasoning with real numbers, and the formats mirror real assessments: single-answer
         questions, <strong>select-all-that-apply</strong> combinations, and <strong>arrange-in-order</strong>
         chains for workflows like APOD and the profile→classify→fix loop.
@@ -552,6 +556,27 @@ if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B,
       <h3 class="sub">Practice questions</h3>
       <span class="sec-score" id="sec-score-port">Section score: 0 / 0</span>
       <div class="quiz" data-section="port"></div>
+    </section>
+
+    <!-- ================= 7. CASE STUDIES ================= -->
+    <section id="case" class="section">
+      <h2>7. Case Studies — Principal-Level Drills</h2>
+      <p class="section-note">
+        Whole-situation questions, the way the work actually arrives: a full profiler report to diagnose,
+        a kernel you didn't write to review, a teammate's claim to check, a regression to triage. Each case
+        bundles several concepts — the skill under test is deciding which evidence matters and which is noise.
+      </p>
+
+      <h3 class="sub">How to approach these</h3>
+      <div class="term-grid">
+        <article class="term-card"><h3>Evidence before edits</h3><p>Every conclusion should trace to a specific number in the report — and the numbers that are <em>absent or normal</em> rule fixes out just as firmly. A diagnosis the metrics don't support is a guess wearing a suit; half of these cases contain a deliberately irrelevant metric.</p></article>
+        <article class="term-card"><h3>Correctness is non-negotiable</h3><p>You'll often optimize kernels whose algorithms you don't fully know. Golden outputs captured before the first change, re-validated after every change — including edge sizes (n not a multiple of the block). A 4× speedup that's 1% wrong is worth exactly nothing.</p></article>
+        <article class="term-card"><h3>Know when you're done</h3><p>At the roofline with clean access patterns, the honest deliverable is "finished, and here's the evidence" plus what an algorithmic change would buy. Saying no to further tuning — with metrics — is a principal-level answer, not a cop-out.</p></article>
+      </div>
+
+      <h3 class="sub">Practice questions</h3>
+      <span class="sec-score" id="sec-score-case">Section score: 0 / 0</span>
+      <div class="quiz" data-section="case"></div>
     </section>
 
     <!-- ================= RESOURCES ================= -->
@@ -1328,6 +1353,130 @@ const quizData = {
       ],
       explain: "Pre-Hopper, feeding tensor cores meant warps doing address arithmetic and cp.async issue for every tile — instructions and registers stolen from math. A TMA descriptor describes the multidimensional tile once; the engine then moves whole tiles asynchronously, completing against an mbarrier, while warps compute. Combined with thread block clusters (blocks sharing distributed shared memory), it's how Hopper/Blackwell GEMM pipelines keep tensor cores saturated — and vendor libraries use it for you."
     }
+  ],
+  case: [
+    {
+      q: "You inherit this kernel profile. What is the diagnosis and the matching fix?",
+      pre: "Kernel: fuse_norm_scale         (2.1 ms — 44% of GPU time in nsys)\nSpeed of Light:   SM 22%        Memory 24%\nOccupancy:        theoretical 50%    achieved 47%\nMemory:           DRAM 12% peak    L2 18% peak    sectors/req 4.1\nWarp stalls:      Barrier 41%    Long Scoreboard 9%    Not Selected 7%\nLaunch:           1024-thread blocks; 3× __syncthreads() per loop iteration",
+      options: [
+        ["Barrier-latency-bound: huge blocks plus frequent __syncthreads() park hundreds of threads waiting for stragglers — use smaller blocks (more independent blocks per SM) and restructure to fewer barriers", true],
+        ["Memory-bound: rewrite the loads to improve coalescing", false],
+        ["Register-bound: cap registers with maxrregcount to raise occupancy", false],
+        ["Compute-bound: move the arithmetic to tensor cores", false]
+      ],
+      explain: "Both SOL numbers low = latency-bound, and the stall table names the latency: 41% Barrier. With 1024-thread blocks, every __syncthreads() gates 32 warps on the slowest one, and an SM holds few independent blocks to switch to. The evidence rules the other options out: sectors/req 4.1 and DRAM 12% say coalescing is fine; achieved ≈ theoretical occupancy says no runtime imbalance and registers aren't the pressing issue; SM 22% says compute isn't the wall. Smaller blocks (128–256) plus barrier-thinning is the targeted fix."
+    },
+    {
+      q: "A teammate reviews this profile and proposes: \"L2 hit rate is terrible — add cache-blocking to fix it.\" Your call?",
+      pre: "Kernel: elementwise_gelu        (0.9 ms)\nSpeed of Light:   SM 31%        Memory 91%\nMemory:           DRAM 89% peak    L2 hit rate 4%    sectors/req 4.0\nOccupancy:        achieved 71%\nAccess pattern:   reads each input element exactly once, writes output once",
+      options: [
+        ["Push back with evidence: a streaming kernel has no reuse for L2 to capture, so 4% is expected and irrelevant; at 89% DRAM with sectors/req 4.0 the kernel is near the roof — only fusing with producer/consumer stages or a smaller datatype moves it", true],
+        ["Agree: add cache-blocking so the hit rate rises above 50%", false],
+        ["Raise occupancy first — 71% leaves bandwidth on the table", false],
+        ["Split the kernel into smaller pieces so each fits in L2", false]
+      ],
+      explain: "Caches pay off on reuse; an elementwise kernel that touches each byte once has nothing to re-hit, so the low hit rate is physics, not a defect — cache-blocking would add complexity and change nothing. The metrics that do matter say the kernel is nearly finished: DRAM 89% with ideal sectors/request. The remaining moves shrink traffic itself: fuse with neighboring elementwise stages, or use FP16/BF16. Documenting why a metric is NOT actionable is explicitly part of this role."
+    },
+    {
+      q: "This transpose runs at 11% of peak bandwidth. ncu shows loads at ~4 sectors/request but stores at ~32. What's wrong?",
+      pre: "__global__ void transpose(const float* in, float* out, int n) {\n  int x = blockIdx.x * 32 + threadIdx.x;   // threadIdx.x fast-varying in a warp\n  int y = blockIdx.y * 32 + threadIdx.y;\n  if (x < n && y < n)\n    out[x * n + y] = in[y * n + x];\n}",
+      options: [
+        ["The reads are coalesced but each warp's writes scatter with stride n — stage a 32×32 tile in shared memory (padded [32][33]) so both the global read and the global write are row-contiguous", true],
+        ["The reads are uncoalesced — swap x and y in the load index", false],
+        ["A race between blocks corrupts the output — add __syncthreads()", false],
+        ["The bounds check causes divergence that serializes every warp", false]
+      ],
+      explain: "Within a warp, threadIdx.x varies fastest, so in[y*n + x] walks consecutive addresses (4 sectors/request — the profiler confirms it) while out[x*n + y] jumps n floats between lanes: 32 separate sectors per warp, ~8× write traffic. A transpose can't make both sides contiguous directly — the standard fix stages tiles in shared memory: read rows coalesced, barrier, write rows of the transposed tile coalesced, with [32][33] padding to dodge the 32-way bank conflict on the transposed access. There's no inter-block race (each block owns its tile), and the guard's divergence only trims edge warps."
+    },
+    {
+      q: "This block reduction intermittently hangs or returns garbage on large inputs. Which line is the defect?",
+      pre: "__shared__ float s[256];\ns[tid] = partial;\n__syncthreads();\nfor (int stride = 128; stride > 0; stride >>= 1) {\n  if (tid < stride) {\n    s[tid] += s[tid + stride];\n    __syncthreads();          // line B\n  }\n}\nif (tid == 0) out[blockIdx.x] = s[0];",
+      options: [
+        ["Line B: __syncthreads() sits inside `if (tid < stride)`, a divergent branch — threads with tid ≥ stride never reach it, which is undefined behavior; move the barrier outside the if", true],
+        ["The initial __syncthreads() is unnecessary and slows the loop down", false],
+        ["s[tid] += s[tid + stride] needs atomicAdd to be safe", false],
+        ["The loop must count up (stride 1 → 128) instead of down", false]
+      ],
+      explain: "__syncthreads() requires all threads of the block to reach the same barrier; once tid ≥ stride threads skip the if-body, the waiting threads block on a barrier half the block will never execute — classically a hang, on newer architectures possibly silent corruption. Correct shape: do the guarded add, then barrier outside the conditional, every iteration, executed by everyone. The initial barrier is required (it publishes the s[tid] stores), no atomics are needed (disjoint indices within a step, ordered by barriers), and counting down is the standard direction that keeps active threads contiguous."
+    },
+    {
+      q: "This histogram kernel is 40× slower than the memcpy-equivalent bandwidth suggests. ncu shows the LSU pipe saturated and massive stall on atomics. Best fix?",
+      pre: "__global__ void hist(const unsigned char* img, size_t n, unsigned int* bins) {\n  size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x;\n  if (i < n) atomicAdd(&bins[img[i]], 1u);   // bins has 256 entries\n}",
+      options: [
+        ["Privatize: each block accumulates into its own 256-bin __shared__ histogram (fast shared-memory atomics, block-local collisions), then merges into the global bins with 256 atomicAdds per block at the end", true],
+        ["Replace atomicAdd with a plain increment — collisions are rare on real images", false],
+        ["Sort the image by pixel value on the host before counting", false],
+        ["Launch one thread per bin instead of one per pixel", false]
+      ],
+      explain: "Millions of threads funneling atomics into 256 global addresses serialize at L2 — atomics to one address are a queue, not parallelism, and skewed images (big sky regions) make it worse. The standard cure is privatization: per-block shared-memory histograms make collisions block-local and cheap, and the merge costs only 256 global atomics per block — thousands of times fewer. A plain increment is a data race (lost counts, and 'rare' is doing unpaid load-bearing work); one-thread-per-bin serializes the scan; host sorting costs more than the histogram."
+    },
+    {
+      type: "multi",
+      q: "Which conclusions does this evidence actually support?",
+      pre: "Speed of Light:   SM 84%        Memory 29%\nPipes:            FP64 93%    FP32 22%    Tensor 0%\nOccupancy:        achieved 39%\nMemory:           sectors/req 4.2     DRAM 21% peak",
+      options: [
+        ["The kernel is compute-bound, specifically limited by the FP64 pipe", true],
+        ["If accuracy requirements allow, FP32 or mixed precision is the highest-leverage change", true],
+        ["The 39% occupancy is not the main problem — at 84% SM utilization there is little idle issue capacity for extra warps to fill", true],
+        ["The access pattern needs coalescing work", false],
+        ["The kernel is DRAM-bandwidth-bound", false]
+      ],
+      explain: "SM SOL 84% with FP64 at 93% names the wall precisely: double-precision throughput (on most non-datacenter GPUs, 1/32–1/64 of FP32 rate). The two big levers are precision (FP32/mixed where tolerable) or hardware with real FP64. The occupancy instinct fails here — warps can't issue into a pipe that's already 93% busy. And nothing indicts memory: sectors/req ~4 is ideal, DRAM 21% is quiet. Principal-level discipline is refusing the fixes the evidence rules out, however familiar they are."
+    },
+    {
+      type: "multi",
+      q: "A junior engineer's PR claims a 4× kernel speedup. Which review checks are essential before believing and merging it?",
+      options: [
+        ["Outputs validated against golden results, including edge sizes (n not a multiple of the block size)", true],
+        ["Timing methodology: warmup iterations, and CUDA events or a device sync before stopping the timer", true],
+        ["Same GPU with locked (or statistically handled) clocks, so boost/thermal variance isn't the 4×", true],
+        ["A before/after profile confirming the claimed mechanism (e.g. sectors/request actually dropped)", true],
+        ["Confirmation that occupancy reached 100%", false],
+        ["Rejection of any inline PTX on principle", false]
+      ],
+      explain: "Most fake speedups die on the first three checks: kernels launch asynchronously, so a CPU timer stopped before a sync 'measures' 4× instantly; the first iteration carries JIT and clock-ramp costs; and boost clocks vary run to run. The fourth check is the principal habit — the profile should agree with the PR's story, otherwise the win is coincidence (or a broken edge case doing less work). 100% occupancy is neither necessary nor sufficient; inline PTX is judged by need and documentation, not banned."
+    },
+    {
+      q: "Each block of a kernel fully occupies one SM on a 66-SM GPU. With 132 blocks it runs in 2.0 ms; with 133 blocks, ~3.0 ms. Why?",
+      options: [
+        ["Wave quantization: 132 blocks = exactly two full 66-block waves; block 133 runs in a third wave where 65 SMs sit idle — you pay nearly a full wave's time for one block", true],
+        ["The extra block overflows L2 and thrashes the cache", false],
+        ["Occupancy per SM drops when the grid isn't a multiple of the SM count", false],
+        ["Kernel launch overhead grows linearly with block count", false]
+      ],
+      explain: "When blocks are SM-sized, the grid executes in discrete waves of 66; runtime is ceil(blocks/66) × wave time. 133 blocks → 3 waves → ~3 ms even though the third wave is 1/66 full. Mitigations: choose block/tile sizes so the block count divides the machine more evenly, use smaller blocks (more, shorter waves round better), or grid-stride loops that decouple block count from data size. This cliff is invisible to per-kernel averages like achieved occupancy over time — you find it by thinking in waves, or in ncu's launch statistics."
+    },
+    {
+      q: "You add a second stream and switch to cudaMemcpyAsync, but nsys still shows copy → kernel → copy strictly serialized. Most likely cause?",
+      options: [
+        ["The host buffers are pageable — cudaMemcpyAsync silently degrades to staged, effectively synchronous copies; allocate them with cudaMallocHost/cudaHostAlloc (pinned) to get real overlap", true],
+        ["The GPU has no copy engines, so overlap is impossible", false],
+        ["cudaStreamSynchronize must be called after each async copy to enable overlap", false],
+        ["PCIe cannot transfer data while any kernel is running", false]
+      ],
+      explain: "The copy engine DMAs from physical pages, so an async copy from pageable memory goes through an internal pinned staging buffer and loses its asynchrony — the API succeeds, the overlap just never happens, which makes this the classic silent pipeline killer. Pinned allocations plus per-stream cudaMemcpyAsync give genuine copy/compute overlap (modern GPUs have multiple copy engines precisely for simultaneous H2D + compute + D2H). Extra syncs would serialize things further; the trap is that nothing errors — only the timeline tells you."
+    },
+    {
+      q: "A memory-bound kernel sits at 93% DRAM SOL with sectors/request 4.0 and is already fused with its neighbors. Your lead asks for another 2×. The principal-level answer is:",
+      options: [
+        ["Present the roofline evidence: at the bandwidth roof with clean access, 2× requires moving fewer bytes — an algorithmic change, more reuse, or a smaller data format (FP16/FP8, compression) — or faster memory; further kernel tuning cannot deliver it, and that documented conclusion is itself the deliverable", true],
+        ["Keep sweeping block sizes and unroll factors until the 2× shows up", false],
+        ["Raise occupancy — there's always headroom somewhere", false],
+        ["Rewrite the kernel in inline PTX for the extra performance", false]
+      ],
+      explain: "93% of DRAM peak with ideal coalescing means the kernel does its work at the speed physics allows for that traffic volume; block-size sweeps, occupancy, and PTX all optimize how fast bytes are requested, not how many there are. The honest options are structural: change the algorithm's reuse, shrink the datatype, keep results resident for the next stage, or change hardware. Saying 'tuning is finished, here is the evidence, here are the structural options and their costs' is exactly the documented optimization reasoning the role asks for."
+    },
+    {
+      type: "order",
+      q: "A teammate capped registers (-maxrregcount 32) to raise occupancy, and the kernel got 3× slower. Arrange the principled investigation.",
+      steps: [
+        "Reproduce both builds and confirm the regression with locked clocks and warmed-up timing",
+        "Compare compiler resource output (-Xptxas -v): registers per thread and spill loads/stores, before vs after",
+        "Confirm the mechanism in ncu: local-memory (LDL/STL) traffic and memory stalls grew in the capped build",
+        "Relax the cap (or tune __launch_bounds__ per-kernel) and re-measure both performance and correctness"
+      ],
+      explain: "Reproduce before theorizing — many '3× regressions' are unlocked clocks or cold-start timing. Then follow the chain from cheapest evidence to fix: the compiler report shows spills exist, the profiler shows they're what actually hurts (occupancy went UP, but every spilled register became a memory access in the hot loop), and only then do you change the build. The general lesson: occupancy bought by force-spilling registers is usually a bad trade, and each investigative step de-risks the next."
+    }
   ]
 };
 
@@ -1365,7 +1514,7 @@ function updateScore() {
   document.getElementById("score-note").textContent =
     t.answered === t.total
       ? `Done! ${t.correct} of ${t.total} correct (${Math.round(100 * t.correct / t.total)}%). Retry to reshuffle questions and options.`
-      : `${t.total - t.answered} of ${t.total} questions remaining across 6 sections.`;
+      : `${t.total - t.answered} of ${t.total} questions remaining across 7 sections.`;
   for (const key of Object.keys(state)) {
     const s = state[key];
     const elScore = document.getElementById(`sec-score-${key}`);
@@ -1390,6 +1539,7 @@ function renderMulti(container, item, number, sectionKey) {
   const card = el("article", "quiz-card");
   card.appendChild(el("span", "qtype", "Select all that apply"));
   card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
+  if (item.pre) card.appendChild(el("pre", "qpre", item.pre));
   const optionsBox = el("div", "options");
   const explain = el("div", "explain");
   explain.appendChild(document.createTextNode(item.explain));
@@ -1434,6 +1584,7 @@ function renderOrder(container, item, number, sectionKey) {
   const card = el("article", "quiz-card");
   card.appendChild(el("span", "qtype", "Arrange in order"));
   card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
+  if (item.pre) card.appendChild(el("pre", "qpre", item.pre));
   const chosenBox = el("div", "order-chosen");
   const placeholder = el("p", "placeholder", "Click the steps below in order — first step first. Click a chosen step to send it back.");
   chosenBox.appendChild(placeholder);
@@ -1510,6 +1661,7 @@ function renderQuestion(container, item, number, sectionKey) {
   if (item.type === "order") return renderOrder(container, item, number, sectionKey);
   const card = el("article", "quiz-card");
   card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
+  if (item.pre) card.appendChild(el("pre", "qpre", item.pre));
   const optionsBox = el("div", "options");
   const explain = el("div", "explain");
   explain.appendChild(document.createTextNode(item.explain));
