@@ -32,6 +32,19 @@
     .options button:disabled { cursor:default; opacity:0.85; }
     .options button.correct { border-color:var(--accent-strong); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; opacity:1; }
     .options button.incorrect { border-color:var(--warn); background:var(--warn-soft); color:var(--warn); font-weight:700; opacity:1; }
+    .options button.selected { border-color:var(--accent); background:var(--accent-soft); box-shadow:inset 0 0 0 1px var(--accent); }
+    .options button.missed { border-color:var(--accent-strong); border-style:dashed; color:var(--accent-strong); font-weight:700; opacity:1; }
+    .qtype { display:inline-block; margin:0 0 8px; padding:2px 9px; border:1px solid var(--accent); border-radius:999px; background:var(--accent-soft); color:var(--accent-strong); font-size:12px; font-weight:700; }
+    .check-row { display:flex; gap:8px; margin-top:10px; }
+    .mini-btn { min-height:34px; border:1px solid var(--accent); border-radius:6px; padding:5px 12px; background:var(--accent); color:#ffffff; font-weight:700; font-size:13px; cursor:pointer; }
+    .mini-btn:hover:enabled { background:var(--accent-strong); border-color:var(--accent-strong); }
+    .mini-btn:disabled { opacity:.5; cursor:default; }
+    .order-chosen { display:flex; flex-direction:column; gap:6px; margin:0 0 10px; padding:10px; min-height:46px; border:1px dashed var(--line); border-radius:6px; background:var(--bg); }
+    .order-chosen .placeholder { margin:0; color:var(--muted); font-size:13px; }
+    .order-item { display:flex; align-items:flex-start; gap:8px; padding:7px 10px; border:1px solid var(--accent); border-radius:6px; background:var(--accent-soft); color:var(--text); font-size:14px; text-align:left; cursor:pointer; }
+    .order-item .num { font-weight:700; color:var(--accent-strong); }
+    .order-item.good { border-color:var(--accent-strong); font-weight:700; }
+    .order-item.bad { border-color:var(--warn); background:var(--warn-soft); }
     .explain { display:none; margin:10px 0 0; padding:10px 12px; border-left:3px solid var(--accent); background:var(--accent-soft); border-radius:0 6px 6px 0; color:var(--text); }
     .explain.show { display:block; }
     .show-all .explain { display:block; }
@@ -74,7 +87,9 @@
         bottleneck, apply the matching fix, and be able to say when a metric is <em>not</em> telling you
         anything. Six sections cover the machine model, the memory system, the profiler, the optimization
         playbook, C++17, and portability across CUDA/HIP/shader models. Difficulty runs from recall up to
-        applied reasoning with real numbers.
+        applied reasoning with real numbers, and the formats mirror real assessments: single-answer
+        questions, <strong>select-all-that-apply</strong> combinations, and <strong>arrange-in-order</strong>
+        chains for workflows like APOD and the profile→classify→fix loop.
       </p>
     </section>
 
@@ -559,6 +574,30 @@ if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B,
 const quizData = {
   arch: [
     {
+      type: "multi",
+      q: "Which of the following can limit a kernel's THEORETICAL occupancy?",
+      options: [
+        ["Registers used per thread", true],
+        ["Shared memory used per block", true],
+        ["The SM's maximum resident-block (block slot) count", true],
+        ["Block size granularity — warps per block vs the SM's warp limit", true],
+        ["The size of the L2 cache", false],
+        ["DRAM bandwidth", false]
+      ],
+      explain: "Theoretical occupancy is a static calculation of how many warps fit on an SM, from four budgets: registers/thread, shared memory/block, block slots, and warp-slot granularity (e.g. 768-thread blocks on a 2048-thread SM fit only twice — 512 threads of capacity are stranded). L2 size and DRAM bandwidth affect how fast resident warps run, not how many fit. And launching too few blocks lowers ACHIEVED occupancy, never theoretical."
+    },
+    {
+      type: "order",
+      q: "Arrange the chain of events that takes a kernel from host code to instructions executing on the GPU.",
+      steps: [
+        "Host calls kernel<<<grid, block>>> — the launch is queued on a stream and the CPU continues asynchronously",
+        "The GPU's work distributor assigns blocks to SMs that have free registers, shared memory, and block slots",
+        "Each SM carves its resident blocks into 32-thread warps with allocated registers",
+        "Warp schedulers pick an eligible warp each cycle and issue its next instruction"
+      ],
+      explain: "Launch (async, queued on a stream) → block distribution (a block runs entirely on one SM) → warp formation (whole warps, which is why block sizes should be multiples of 32) → per-warp issue (why divergence and coalescing are warp-granular). Knowing which stage owns which decision tells you where each fix applies: launch shape at step 1–2, resource budgets at step 3, stalls at step 4."
+    },
+    {
       q: "What is a warp on NVIDIA hardware?",
       options: [
         ["A fixed group of 32 threads that the SM schedules and issues instructions to as a unit", true],
@@ -650,6 +689,30 @@ const quizData = {
     }
   ],
   mem: [
+    {
+      type: "multi",
+      q: "A kernel is DRAM-bandwidth-bound (memory SOL ~90%, sectors/request already ~4). Which changes actually reduce the bytes moved to and from DRAM?",
+      options: [
+        ["Fusing it with the elementwise kernel that consumes its output", true],
+        ["Storing streamed data as FP16 instead of FP32 where precision allows", true],
+        ["Tiling reused data into shared memory instead of re-reading global memory", true],
+        ["Converting an AoS layout so warps stop fetching struct fields they never use", true],
+        ["Raising occupancy with __launch_bounds__", false],
+        ["Increasing the block size from 128 to 256 threads", false]
+      ],
+      explain: "When the DRAM pipe is saturated with already-efficient access, the only wins move fewer bytes: fusion deletes intermediate round trips, half-precision halves the traffic, tiling converts repeated global reads into on-chip reuse, and dropping unused fields stops paying for dead sectors. Occupancy and block shape change how latency is hidden — they cannot create bandwidth that is already fully consumed."
+    },
+    {
+      type: "order",
+      q: "Arrange one iteration of a tiled shared-memory loop (the tiled-matmul skeleton) in the correct order.",
+      steps: [
+        "Each thread loads its element of the current tile from global memory into shared memory (coalesced)",
+        "__syncthreads() — no one computes until the tile is fully loaded",
+        "All threads compute with the tile, each shared element reused many times",
+        "__syncthreads() — no one overwrites the tile until everyone has finished reading it"
+      ],
+      explain: "Load → barrier → compute → barrier, then the loop advances to the next tile. Each barrier guards a different hazard: the first is read-after-write (computing from a half-loaded tile), the second is write-after-read (a fast warp reloading the buffer while a slow warp still reads it). Dropping the second barrier is the classic intermittent-corruption bug; double buffering is the optimization that removes it by alternating two tiles."
+    },
     {
       q: "A warp's 32 threads read consecutive 4-byte floats starting at a 128-byte-aligned address. What does the memory system move?",
       options: [
@@ -762,6 +825,41 @@ const quizData = {
     }
   ],
   prof: [
+    {
+      type: "order",
+      q: "Arrange the canonical profiler-guided optimization workflow for a kernel you did not write.",
+      steps: [
+        "Record a performance baseline and save golden outputs for correctness checking",
+        "Profile the whole application timeline (Nsight Systems) to see what dominates wall time",
+        "Deep-profile the dominant kernel (Nsight Compute) and classify it via Speed of Light",
+        "Apply the one fix that matches the diagnosed limiter",
+        "Re-validate against the golden outputs and re-profile — the bottleneck moves, so iterate"
+      ],
+      explain: "Baseline and golden outputs come first because every later step needs a reference for 'faster' and 'still correct' — especially when you don't own the algorithm. The timeline prevents optimizing an irrelevant kernel (Amdahl); SOL classification prevents applying the wrong family of fix; one change at a time keeps causality clear; and re-profiling is mandatory because removing one bottleneck promotes the next."
+    },
+    {
+      type: "order",
+      q: "NVIDIA's Best Practices Guide structures performance work as the APOD cycle. Arrange its stages.",
+      steps: [
+        "Assess — profile the existing code and locate the hotspots that actually bound performance",
+        "Parallelize — expose the hotspot as parallel work, preferring libraries before custom kernels",
+        "Optimize — tune the parallel version guided by profiler metrics",
+        "Deploy — ship the improvement, then start the next cycle on the new bottleneck"
+      ],
+      explain: "APOD is deliberately a cycle, not a checklist: Assess with real profiles (not intuition), Parallelize with the cheapest thing that works (cuBLAS/cuFFT/Thrust before hand-written kernels), Optimize only what the profiler indicts, Deploy so wins land early — then loop, because the bottleneck has moved. Interviewers like it because it encodes the discipline of measuring before and after every change."
+    },
+    {
+      type: "multi",
+      q: "Which warp-stall reasons in Nsight Compute normally indicate a real problem worth fixing?",
+      options: [
+        ["Long Scoreboard — waiting on global/local memory loads", true],
+        ["Barrier — parked at __syncthreads() for slower threads", true],
+        ["LG Throttle — the load/store instruction queue is full", true],
+        ["Not Selected — eligible, but the scheduler issued a different warp", false],
+        ["Selected — the warp issued an instruction this cycle", false]
+      ],
+      explain: "The waiting stalls are actionable: Long Scoreboard says memory latency is exposed (coalesce, cache, add ILP/occupancy), Barrier says work between syncs is unbalanced, LG Throttle says too many small memory ops are being issued (vectorize). 'Selected' is literally the warp doing work, and 'Not Selected' means spare eligible warps existed — evidence of surplus parallelism, not a defect. Quoting stall reasons without knowing which are benign is a classic assessment trap."
+    },
     {
       q: "Nsight Compute shows SM throughput 28% and memory throughput 31% of peak. What is the kernel?",
       options: [
@@ -905,6 +1003,30 @@ const quizData = {
   ],
   opt: [
     {
+      type: "multi",
+      q: "Nsight Compute shows a kernel is latency-bound: both SOL numbers low, warps mostly waiting. Which techniques address that diagnosis?",
+      options: [
+        ["Process several independent elements per thread (more ILP)", true],
+        ["Raise occupancy so more warps are resident to hide latency", true],
+        ["Remove warp divergence and shared-memory bank conflicts", true],
+        ["Privatize a contended atomic counter into per-block copies", true],
+        ["Switch the arithmetic to tensor cores", false],
+        ["Store data as FP16 to halve DRAM traffic", false]
+      ],
+      explain: "Latency-bound means neither compute nor bandwidth is saturated — the SM idles between dependent operations. The fixes all create more independent work in flight or remove serialization: ILP, occupancy, divergence/conflict cleanup, and de-contending atomics. Tensor cores raise a compute roof the kernel isn't touching, and halving traffic helps a saturated memory pipe the kernel doesn't have — both are answers to different diagnoses."
+    },
+    {
+      type: "order",
+      q: "Arrange the stages of a fast large-array sum reduction.",
+      steps: [
+        "Each thread accumulates several input elements into a private register sum (grid-stride loop)",
+        "Block-level tree reduction in shared memory, halving active threads with __syncthreads() between steps",
+        "At 32 values, finish inside the warp with __shfl_down_sync — no barriers needed",
+        "One partial per block: atomicAdd into the global total, or run a second small kernel over the partials"
+      ],
+      explain: "The chain runs from cheapest parallelism to most expensive synchronization: registers (free) → shared memory + block barriers (cheap) → warp shuffles (barrier-free by construction) → one global atomic per block (expensive, so done once). Reversing any two stages pays more synchronization for the same math — e.g. atomics per element instead of per block is the classic 1000× mistake. CUB's BlockReduce packages steps 2–3."
+    },
+    {
       q: "Why does staging tiles of A and B into shared memory make matrix multiply so much faster?",
       options: [
         ["Each global element is loaded once per tile and reused T times from fast on-chip memory, raising arithmetic intensity from memory-bound to compute-bound territory", true],
@@ -1027,6 +1149,19 @@ const quizData = {
   ],
   cpp: [
     {
+      type: "multi",
+      q: "The role asks for fluency 'through C++17'. Which of these features are actually C++17 (not later)?",
+      options: [
+        ["if constexpr", true],
+        ["Structured bindings — auto [a, b] = …", true],
+        ["Fold expressions — (args + ...)", true],
+        ["std::optional, std::variant, std::string_view", true],
+        ["Concepts and requires clauses", false],
+        ["Coroutines — co_await / co_yield", false]
+      ],
+      explain: "Concepts, ranges, and coroutines are C++20 — using them in an answer scoped to C++17 is exactly the boundary such assessments probe. The C++17 toolkit that matters for kernel work: if constexpr and fold expressions for compile-time kernel configuration, structured bindings and the vocabulary types (optional/variant/string_view) for clean host code, plus inline variables and CTAD."
+    },
+    {
       q: "In a template kernel, how does `if constexpr (UseBias) { … }` differ from a regular `if` with a compile-time-constant condition?",
       options: [
         ["The false branch is discarded at instantiation — it is never compiled for that instantiation and (if dependent) may even contain code that would be invalid for those template arguments", true],
@@ -1108,6 +1243,31 @@ const quizData = {
     }
   ],
   port: [
+    {
+      type: "multi",
+      q: "A CUDA kernel is ported to a 64-lane CDNA wavefront via HIP. Which constructs are likely to break or silently miscompute?",
+      options: [
+        ["A shuffle reduction whose offset loop starts at 16", true],
+        ["A hardcoded full-warp mask like 0xffffffff", true],
+        ["A __shared__ float scratch[32] array holding one partial per warp", true],
+        ["Grid-size math assuming 32 threads per scheduling unit", true],
+        ["__syncthreads() block barriers", false],
+        ["A structure-of-arrays global memory layout", false]
+      ],
+      explain: "Everything that bakes in the number 32 is suspect: a 16-offset shuffle tree reduces only half a 64-lane wavefront, a 32-bit mask names half the lanes, warp-count-sized scratch arrays are too small, and per-warp work division is off by 2×. Block barriers and memory layouts carry over untouched — block semantics and coalescing physics are the portable part. The fix is warpSize-parameterized (or width-templated) code."
+    },
+    {
+      type: "order",
+      q: "Arrange a sane CUDA→HIP porting workflow.",
+      steps: [
+        "Run hipify to mechanically translate the CUDA API calls",
+        "Audit for width assumptions: warpSize, shuffle masks, per-warp scratch sizes",
+        "Swap NVIDIA-only library calls for ROCm equivalents (cuBLAS → hipBLAS/rocBLAS)",
+        "Build with hipcc and validate against golden outputs from the CUDA version",
+        "Re-profile on the AMD part with rocprof/Omniperf — the bottleneck may have moved"
+      ],
+      explain: "Mechanical translation first (it's free), then the semantic issues tools can't catch (the 64-lane wavefront trap), then the ecosystem gaps (libraries), then prove correctness against the original before believing any performance number, and finally re-profile — different cache sizes, LDS behavior, and wave width mean the CUDA-era tuning decisions must be re-verified, not assumed."
+    },
     {
       q: "A CUDA warp-shuffle reduction hardcoding 32 lanes is ported to an AMD MI-series (CDNA) GPU with HIP. What happens?",
       options: [
@@ -1217,7 +1377,137 @@ function updateScore() {
   }
 }
 
+function finishQuestion(sectionKey, allRight, explain) {
+  state[sectionKey].answered += 1;
+  if (allRight) state[sectionKey].correct += 1;
+  const verdict = el("span", "verdict " + (allRight ? "good" : "bad"), allRight ? "Correct. " : "Incorrect. ");
+  explain.insertBefore(verdict, explain.firstChild);
+  explain.classList.add("show");
+  updateScore();
+}
+
+function renderMulti(container, item, number, sectionKey) {
+  const card = el("article", "quiz-card");
+  card.appendChild(el("span", "qtype", "Select all that apply"));
+  card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
+  const optionsBox = el("div", "options");
+  const explain = el("div", "explain");
+  explain.appendChild(document.createTextNode(item.explain));
+
+  const buttons = [];
+  for (const [text, isCorrect] of shuffle(item.options)) {
+    const btn = el("button", "", text);
+    btn.type = "button";
+    btn.dataset.correct = isCorrect ? "1" : "0";
+    btn.addEventListener("click", () => {
+      if (!btn.disabled) btn.classList.toggle("selected");
+    });
+    buttons.push(btn);
+    optionsBox.appendChild(btn);
+  }
+
+  const row = el("div", "check-row");
+  const check = el("button", "mini-btn", "Check answer");
+  check.type = "button";
+  check.addEventListener("click", () => {
+    let allRight = true;
+    for (const b of buttons) {
+      const sel = b.classList.contains("selected");
+      const corr = b.dataset.correct === "1";
+      b.disabled = true;
+      if (corr && sel) b.classList.add("correct");
+      else if (!corr && sel) { b.classList.add("incorrect"); allRight = false; }
+      else if (corr && !sel) { b.classList.add("missed"); b.textContent = "(missed) " + b.textContent; allRight = false; }
+    }
+    check.disabled = true;
+    finishQuestion(sectionKey, allRight, explain);
+  });
+  row.appendChild(check);
+
+  card.appendChild(optionsBox);
+  card.appendChild(row);
+  card.appendChild(explain);
+  container.appendChild(card);
+}
+
+function renderOrder(container, item, number, sectionKey) {
+  const card = el("article", "quiz-card");
+  card.appendChild(el("span", "qtype", "Arrange in order"));
+  card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
+  const chosenBox = el("div", "order-chosen");
+  const placeholder = el("p", "placeholder", "Click the steps below in order — first step first. Click a chosen step to send it back.");
+  chosenBox.appendChild(placeholder);
+  const optionsBox = el("div", "options");
+  const explain = el("div", "explain");
+  explain.appendChild(document.createTextNode(
+    item.explain + " Correct chain: " + item.steps.map((s, i) => `(${i + 1}) ${s}`).join(" → ") + "."
+  ));
+
+  const chosen = [];
+  let done = false;
+  let check;
+
+  function renumber() {
+    chosen.forEach((c, i) => { c.numEl.textContent = (i + 1) + "."; });
+    placeholder.style.display = chosen.length ? "none" : "";
+    check.disabled = chosen.length !== item.steps.length;
+  }
+
+  const poolButtons = shuffle(item.steps).map(text => {
+    const btn = el("button", "", text);
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      if (done || btn.disabled) return;
+      btn.disabled = true;
+      const numEl = el("span", "num", "");
+      const itemBtn = el("button", "order-item");
+      itemBtn.type = "button";
+      itemBtn.appendChild(numEl);
+      itemBtn.appendChild(document.createTextNode(text));
+      const entry = { text, itemBtn, numEl };
+      itemBtn.addEventListener("click", () => {
+        if (done) return;
+        chosenBox.removeChild(itemBtn);
+        chosen.splice(chosen.indexOf(entry), 1);
+        btn.disabled = false;
+        renumber();
+      });
+      chosen.push(entry);
+      chosenBox.appendChild(itemBtn);
+      renumber();
+    });
+    optionsBox.appendChild(btn);
+    return btn;
+  });
+
+  const row = el("div", "check-row");
+  check = el("button", "mini-btn", "Check order");
+  check.type = "button";
+  check.disabled = true;
+  check.addEventListener("click", () => {
+    done = true;
+    check.disabled = true;
+    let allRight = true;
+    chosen.forEach((c, i) => {
+      const ok = c.text === item.steps[i];
+      c.itemBtn.classList.add(ok ? "good" : "bad");
+      if (!ok) allRight = false;
+    });
+    poolButtons.forEach(b => { b.disabled = true; });
+    finishQuestion(sectionKey, allRight, explain);
+  });
+  row.appendChild(check);
+
+  card.appendChild(chosenBox);
+  card.appendChild(optionsBox);
+  card.appendChild(row);
+  card.appendChild(explain);
+  container.appendChild(card);
+}
+
 function renderQuestion(container, item, number, sectionKey) {
+  if (item.type === "multi") return renderMulti(container, item, number, sectionKey);
+  if (item.type === "order") return renderOrder(container, item, number, sectionKey);
   const card = el("article", "quiz-card");
   card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
   const optionsBox = el("div", "options");
