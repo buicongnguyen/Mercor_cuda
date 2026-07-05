@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Hands-on CUDA coding interview practice: 12 kernel-writing problems with complete solutions and interviewer discussion — reduction, transpose, matmul, histogram, scan, softmax, debugging, and stream pipelines.">
+  <title>GPU Kernel Coding Interview Practice</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .sub { margin-top: 24px; }
+    .prob { margin:14px 0; padding:16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+    .prob-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .prob-head h3 { margin-bottom:4px; }
+    .tag { display:inline-flex; align-items:center; min-height:26px; padding:2px 11px; border-radius:999px; font-size:12px; font-weight:700; white-space:nowrap; }
+    .tag.warm { background:var(--accent-soft); color:var(--accent-strong); border:1px solid var(--accent); }
+    .tag.core { background:var(--accent-soft); color:var(--accent-strong); border:1px solid var(--accent-strong); }
+    .tag.hard { background:var(--warn-soft); color:var(--warn); border:1px solid var(--warn); }
+    .tests { margin:2px 0 10px; color:var(--muted); font-size:14px; }
+    .tests strong { color:var(--accent-strong); }
+    .code { margin:10px 0 0; padding:13px 15px; overflow-x:auto; background:var(--bg); border:1px solid var(--line); border-radius:6px; font-family:Consolas,Menlo,monospace; font-size:13px; line-height:1.5; color:var(--text); }
+    details.sol { margin-top:12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
+    details.sol summary { padding:10px 14px; cursor:pointer; font-weight:700; color:var(--accent-strong); }
+    details.sol summary:hover { background:var(--accent-soft); border-radius:6px; }
+    details.sol[open] summary { border-bottom:1px solid var(--line); }
+    .sol-body { padding:4px 14px 14px; }
+    .sol-body ul { margin:10px 0 0; padding-left:22px; }
+    .sol-body li { margin-bottom:7px; color:var(--muted); }
+    .sol-body li strong { color:var(--text); }
+    .groupnote { color:var(--muted); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GPU kernel optimization study hub</p>
+      <h1>Coding Interview Practice — 12 Kernels with Solutions</h1>
+    </div>
+    <nav aria-label="Site navigation">
+      <a href="index.html">Hub</a>
+      <a href="gpu-kernel-skills.html">Skills &amp; MCQ</a>
+      <a href="#warm">Warm-ups</a>
+      <a href="#core">Core patterns</a>
+      <a href="#hard">Harder</a>
+      <a href="#debug">Debug &amp; host</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="section intro">
+      <h2>How these interviews go</h2>
+      <p>
+        Reported GPU-role coding rounds (NVIDIA, AMD, AI labs) sit around LeetCode-medium difficulty but in CUDA:
+        write a working kernel on a whiteboard or shared editor, then defend its <em>performance</em> — coalescing,
+        shared-memory use, synchronization, and how you'd verify and profile it. The recurring set is remarkably
+        stable: reduction, transpose/rotation, tiled matmul, histogram, scan, stencil, softmax, a debugging
+        exercise, and host-side transfer pipelining. Each problem below states the task, what the interviewer is
+        actually testing, and a complete solution with the discussion points that separate a pass from a strong pass.
+        Write your attempt before opening the solution.
+      </p>
+    </section>
+
+    <!-- ================= WARM-UPS ================= -->
+    <section id="warm" class="section">
+      <h2>Warm-ups</h2>
+      <p class="groupnote">Five-minute questions that screen for the basics: index math, guards, launch configuration.</p>
+
+      <article class="prob" id="q1">
+        <div class="prob-head"><h3>1. SAXPY (vector add) — the screener</h3><span class="tag warm">Warm-up</span></div>
+        <p class="tests"><strong>Tests:</strong> thread indexing, bounds guard, grid-stride idiom, launch configuration.</p>
+        <p>Write a kernel computing <code>y[i] = a·x[i] + y[i]</code> for <code>n</code> floats, correct for any <code>n</code>, plus the host-side launch. Then: how do you pick the grid size?</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void saxpy(int n, float a, const float* __restrict__ x,
+                      float* __restrict__ y) {
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x;
+         i &lt; n;
+         i += gridDim.x * blockDim.x)              // grid-stride loop
+        y[i] = a * x[i] + y[i];
+}
+
+// host
+int block = 256;
+int grid  = std::min((n + block - 1) / block,      // round UP, never n/block
+                     32 * numSMs);                 // cap: a few waves is enough
+saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
+          <ul>
+            <li><strong>The two classic fails:</strong> <code>n / block</code> (drops the tail unless n divides evenly) and no guard at all (out-of-bounds writes). The grid-stride loop handles both and works for any launch shape.</li>
+            <li><strong>Grid size answer:</strong> enough blocks to fill every SM a few times over (e.g. 32 × SM count); more than that adds nothing for a memory-bound kernel. Mentioning the cap shows you know launches aren't "one thread per element or bust".</li>
+            <li><strong>Performance framing:</strong> SAXPY is 2 FLOPs per 12 bytes — hopelessly memory-bound, so the only meaningful metric is achieved bandwidth vs peak. Saying this unprompted is a strong-pass signal.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q2">
+        <div class="prob-head"><h3>2. AoS → SoA conversion</h3><span class="tag warm">Warm-up</span></div>
+        <p class="tests"><strong>Tests:</strong> whether you actually understand coalescing, not just recite it.</p>
+        <p>Given <code>struct P { float x, y, z, w; }</code> stored as an array of <code>n</code> structs, write a kernel that produces four separate arrays <code>X, Y, Z, W</code>. Which direction of this kernel is coalesced, and does it matter here?</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void aos_to_soa(const float4* __restrict__ in,   // P as float4
+                           float* __restrict__ X, float* __restrict__ Y,
+                           float* __restrict__ Z, float* __restrict__ W,
+                           int n) {
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i &lt; n;
+         i += gridDim.x * blockDim.x) {
+        float4 p = in[i];        // ONE 16-byte vector load — fully coalesced
+        X[i] = p.x;  Y[i] = p.y; // four coalesced 4-byte stores
+        Z[i] = p.z;  W[i] = p.w;
+    }
+}</pre>
+          <ul>
+            <li><strong>The insight being probed:</strong> reading the struct as a <code>float4</code> makes the "bad" AoS side coalesced too — a warp reads 32 consecutive 16-byte vectors = 512 contiguous bytes. Loading field-by-field through a <code>const P*</code> would stride 16 bytes per lane per field and waste 3/4 of each sector.</li>
+            <li><strong>Requirement to state:</strong> the struct is 16 bytes and the pointer 16-byte aligned, so the <code>float4</code> reinterpret is legal.</li>
+            <li><strong>Bigger picture:</strong> this kernel is worth running once if many later kernels each use one field; if only one kernel reads the data, fuse the conversion into it instead — a data-layout decision, not a kernel decision.</li>
+          </ul>
+        </div></details>
+      </article>
+    </section>
+
+    <!-- ================= CORE PATTERNS ================= -->
+    <section id="core" class="section">
+      <h2>Core patterns — the questions everyone reports</h2>
+      <p class="groupnote">The five kernels that appear in interview reports again and again. Know these cold, including the follow-up questions.</p>
+
+      <article class="prob" id="q3">
+        <div class="prob-head"><h3>3. Parallel sum reduction</h3><span class="tag core">Most asked</span></div>
+        <p class="tests"><strong>Tests:</strong> tree reduction, __syncthreads discipline, warp shuffles, cross-block combination.</p>
+        <p>Sum <code>n</code> floats into a single value. Start with a working version, then the interviewer will push: fewer barriers? less shared memory? how do blocks combine?</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void reduce_sum(const float* __restrict__ in, float* out, int n) {
+    __shared__ float s[256];                       // = blockDim.x
+    // 1) each thread accumulates many elements in a REGISTER (grid-stride)
+    float v = 0.f;
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i &lt; n;
+         i += gridDim.x * blockDim.x)
+        v += in[i];
+    s[threadIdx.x] = v;
+    __syncthreads();
+    // 2) shared-memory tree down to one warp (stride halving keeps
+    //    active threads CONTIGUOUS -> no divergence inside a warp)
+    for (int stride = 128; stride &gt; 32; stride &gt;&gt;= 1) {
+        if (threadIdx.x &lt; stride) s[threadIdx.x] += s[threadIdx.x + stride];
+        __syncthreads();
+    }
+    // 3) last 64 values: finish inside one warp, barrier-free
+    if (threadIdx.x &lt; 32) {
+        v = s[threadIdx.x] + s[threadIdx.x + 32];
+        for (int off = 16; off &gt; 0; off &gt;&gt;= 1)
+            v += __shfl_down_sync(0xffffffff, v, off);
+        if (threadIdx.x == 0) atomicAdd(out, v);   // 4) one atomic per block
+    }
+}
+// host: cudaMemset(out, 0, 4) before launch!</pre>
+          <ul>
+            <li><strong>The layered structure is the answer:</strong> registers (free) → shared tree (cheap) → shuffles (barrier-free) → one atomic per block (expensive, done once). Each layer uses the cheapest mechanism that still works.</li>
+            <li><strong>Follow-up "why stride halving downward?":</strong> active threads stay contiguous (0..stride), so whole warps retire; the naive interleaved version (<code>tid % (2*stride) == 0</code>) diverges every warp.</li>
+            <li><strong>Follow-up "alternatives to the atomic?":</strong> write per-block partials and run a second small kernel — deterministic order (bitwise-reproducible), vs atomicAdd's run-to-run float variation. Interviewers love that you know reductions reorder math.</li>
+            <li><strong>Production answer:</strong> <code>cub::DeviceReduce::Sum</code> — say it after, not instead of, writing the kernel.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q4">
+        <div class="prob-head"><h3>4. Matrix transpose (and its twin: rotate an image 90°)</h3><span class="tag core">Core</span></div>
+        <p class="tests"><strong>Tests:</strong> the read-xor-write coalescing dilemma, shared-memory staging, bank-conflict padding.</p>
+        <p>Transpose an <code>n×n</code> float matrix. The naive version is trivially correct — why is it slow, and how do you fix it? (The reported NVIDIA "rotate an image 90°" question is this plus one index flip.)</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void transpose(const float* __restrict__ in,
+                          float* __restrict__ out, int n) {
+    __shared__ float tile[32][33];                 // +1: kills bank conflicts
+    int x = blockIdx.x * 32 + threadIdx.x;         // read coords
+    int y = blockIdx.y * 32 + threadIdx.y;
+    if (x &lt; n &amp;&amp; y &lt; n)
+        tile[threadIdx.y][threadIdx.x] = in[y * n + x];   // coalesced read
+    __syncthreads();
+    x = blockIdx.y * 32 + threadIdx.x;             // write coords: SWAP the
+    y = blockIdx.x * 32 + threadIdx.y;             // BLOCK indices...
+    if (x &lt; n &amp;&amp; y &lt; n)
+        out[y * n + x] = tile[threadIdx.x][threadIdx.y];  // ...and read the
+}                                                  // tile transposed: write
+                                                   // is coalesced too
+// rotate 90° clockwise instead: out is n×n with
+//   out[c][n-1-r] = in[r][c]  ->  same tile staging, write column mirrored</pre>
+          <ul>
+            <li><strong>The dilemma to articulate:</strong> direct transpose makes exactly one of read/write strided — a warp's stores scatter across n-float strides, ~32 sectors per request, ~8× write traffic. No index cleverness fixes both sides <em>in global memory</em>.</li>
+            <li><strong>The fix:</strong> stage a 32×32 tile in shared memory; global read AND write are both row-contiguous, and the transposition happens in the tile indices where "strided" access is nearly free.</li>
+            <li><strong>Why [32][33]:</strong> reading <code>tile[threadIdx.x][…]</code> walks a column; with stride 32 all lanes hit one bank (32-way conflict). Stride 33 → one bank per row. Expect this exact follow-up.</li>
+            <li><strong>Verification answer:</strong> transpose twice, compare to the input bitwise (no FP reordering here — memcmp is legal for a transpose).</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q5">
+        <div class="prob-head"><h3>5. Histogram (256 bins)</h3><span class="tag core">Core</span></div>
+        <p class="tests"><strong>Tests:</strong> atomics, contention reasoning, the privatization pattern.</p>
+        <p>Count byte-value frequencies over <code>n</code> bytes into 256 bins. The one-line atomicAdd version works — why does it crawl on skewed data, and what's the standard fix?</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void hist256(const unsigned char* __restrict__ data, size_t n,
+                        unsigned int* __restrict__ bins) {
+    __shared__ unsigned int local[256];
+    // 1) zero the block-private histogram (cooperatively)
+    for (int i = threadIdx.x; i &lt; 256; i += blockDim.x) local[i] = 0;
+    __syncthreads();
+    // 2) accumulate into SHARED-memory bins: collisions are block-local
+    for (size_t i = blockIdx.x * (size_t)blockDim.x + threadIdx.x; i &lt; n;
+         i += (size_t)gridDim.x * blockDim.x)
+        atomicAdd(&amp;local[data[i]], 1u);
+    __syncthreads();
+    // 3) merge: 256 global atomics per BLOCK, not per element
+    for (int i = threadIdx.x; i &lt; 256; i += blockDim.x)
+        atomicAdd(&amp;bins[i], local[i]);
+}</pre>
+          <ul>
+            <li><strong>Why the naive version dies:</strong> atomics to one address serialize; a skewed input (an image that's mostly sky) funnels millions of updates into a few global addresses — a queue at L2, not parallel work.</li>
+            <li><strong>Privatization economics:</strong> collisions still happen in shared memory but cost ~nanoseconds there; the global merge is 256 atomics per block instead of one per input byte — a ~10,000× reduction in global atomic traffic for large inputs.</li>
+            <li><strong>Follow-ups:</strong> byte reads are still coalesced (consecutive lanes read consecutive bytes); <code>size_t</code> indexing matters beyond 2³¹ elements; for few-bin float histograms mention per-<em>warp</em> copies to cut shared-memory contention further.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q6">
+        <div class="prob-head"><h3>6. Tiled matrix multiply</h3><span class="tag core">Core</span></div>
+        <p class="tests"><strong>Tests:</strong> the data-reuse argument (arithmetic intensity), double-barrier discipline, boundary handling.</p>
+        <p>Write C = A×B for <code>N×N</code> floats using shared-memory tiles, correct for N not a multiple of the tile size. Be ready for: "why is this faster than the naive version — with numbers?"</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">template &lt;int T&gt;                                    // T = 16 or 32
+__global__ void sgemm(const float* __restrict__ A, const float* __restrict__ B,
+                      float* __restrict__ C, int N) {
+    __shared__ float As[T][T], Bs[T][T + 1];
+    int row = blockIdx.y * T + threadIdx.y;
+    int col = blockIdx.x * T + threadIdx.x;
+    float acc = 0.f;
+    for (int k0 = 0; k0 &lt; N; k0 += T) {
+        // guarded, coalesced tile loads (zero-pad outside the matrix)
+        As[threadIdx.y][threadIdx.x] =
+            (row &lt; N &amp;&amp; k0 + threadIdx.x &lt; N) ? A[row * N + k0 + threadIdx.x] : 0.f;
+        Bs[threadIdx.y][threadIdx.x] =
+            (k0 + threadIdx.y &lt; N &amp;&amp; col &lt; N) ? B[(k0 + threadIdx.y) * N + col] : 0.f;
+        __syncthreads();                            // tile fully loaded
+        #pragma unroll
+        for (int k = 0; k &lt; T; ++k)
+            acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+        __syncthreads();                            // done reading before reload
+    }
+    if (row &lt; N &amp;&amp; col &lt; N) C[row * N + col] = acc;
+}</pre>
+          <ul>
+            <li><strong>The numbers they want:</strong> naive matmul loads each A/B element N times from DRAM (~0.25 FLOP/byte — memory-bound). Tiling loads each element once per tile: T× fewer bytes, arithmetic intensity ~T/4 FLOP/byte — at T=32 the kernel crosses to compute-bound.</li>
+            <li><strong>Both barriers are load-bearing:</strong> the first prevents computing on a half-loaded tile, the second prevents a fast warp from overwriting a tile others still read. Removing the second is the classic intermittent-corruption bug.</li>
+            <li><strong>Zero-padding the guards</strong> keeps the inner loop branch-free — cleaner than guarding the accumulation.</li>
+            <li><strong>Escalation path if asked "faster?":</strong> thread coarsening (each thread computes a register tile), vectorized loads, double buffering with cp.async, tensor cores — in that order. And cuBLAS is the production answer.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q7">
+        <div class="prob-head"><h3>7. 1-D convolution / stencil with halo</h3><span class="tag core">Core</span></div>
+        <p class="tests"><strong>Tests:</strong> halo loading, constant memory, boundary handling — the pattern behind all stencil codes.</p>
+        <p>Apply a 7-tap filter (radius 3) to <code>n</code> floats: <code>out[i] = Σ w[k]·in[i+k]</code>, k ∈ [−3, 3], zero beyond the edges. Use shared memory so each input is read from global memory once per block.</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__constant__ float c_w[7];                          // broadcast-friendly
+
+__global__ void conv1d_r3(const float* __restrict__ in,
+                          float* __restrict__ out, int n) {
+    constexpr int R = 3, B = 256;
+    __shared__ float s[B + 2 * R];                  // center + two halos
+    int base = blockIdx.x * B;
+    int g    = base + threadIdx.x;
+    s[threadIdx.x + R] = (g &lt; n) ? in[g] : 0.f;     // center (coalesced)
+    if (threadIdx.x &lt; R) {
+        int lg = base - R + threadIdx.x;            // left halo
+        s[threadIdx.x] = (lg &gt;= 0) ? in[lg] : 0.f;
+        int rg = base + B + threadIdx.x;            // right halo
+        s[B + R + threadIdx.x] = (rg &lt; n) ? in[rg] : 0.f;
+    }
+    __syncthreads();
+    if (g &lt; n) {
+        float acc = 0.f;
+        #pragma unroll
+        for (int k = -R; k &lt;= R; ++k)
+            acc += c_w[k + R] * s[threadIdx.x + R + k];
+        out[g] = acc;
+    }
+}
+// host: cudaMemcpyToSymbol(c_w, w, sizeof(w));</pre>
+          <ul>
+            <li><strong>Why shared memory:</strong> without it each input element is read up to 7 times from global; with the halo tile, once per block. Same reuse argument as matmul, smaller scale.</li>
+            <li><strong>Why constant memory for weights:</strong> every thread reads the same <code>w[k]</code> at the same time — the broadcast case constant cache is built for. (For large/dynamic filters, pass a pointer and rely on L1/read-only cache instead.)</li>
+            <li><strong>Halo subtlety:</strong> the first R threads load <em>both</em> halos — fine for R ≤ blockDim; say so. The guards implement zero-padding at array ends.</li>
+            <li><strong>2-D follow-up:</strong> same idea with a (B+2R)² tile — or separable filters as two 1-D passes, which is usually the right answer and worth volunteering.</li>
+          </ul>
+        </div></details>
+      </article>
+    </section>
+
+    <!-- ================= HARDER ================= -->
+    <section id="hard" class="section">
+      <h2>Harder — senior/principal rounds</h2>
+      <p class="groupnote">Multi-phase kernels where the structure, not the syntax, is the test.</p>
+
+      <article class="prob" id="q8">
+        <div class="prob-head"><h3>8. Block-wide inclusive prefix sum (scan)</h3><span class="tag hard">Hard</span></div>
+        <p class="tests"><strong>Tests:</strong> shuffle-based warp scan, hierarchical composition (warp → block → grid).</p>
+        <p>Compute the inclusive prefix sum of one block's worth of data (e.g. 1024 floats) using warp shuffles. Then explain how you'd extend it to arbitrary <code>n</code>.</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void block_scan_inclusive(const float* __restrict__ in,
+                                     float* __restrict__ out, int n) {
+    __shared__ float warp_sums[32];
+    int g    = blockIdx.x * blockDim.x + threadIdx.x;
+    int lane = threadIdx.x &amp; 31, warp = threadIdx.x &gt;&gt; 5;
+    float v = (g &lt; n) ? in[g] : 0.f;
+
+    // 1) inclusive scan WITHIN each warp (Hillis-Steele on shuffles)
+    for (int off = 1; off &lt; 32; off &lt;&lt;= 1) {
+        float u = __shfl_up_sync(0xffffffff, v, off);
+        if (lane &gt;= off) v += u;
+    }
+    if (lane == 31) warp_sums[warp] = v;            // each warp's total
+    __syncthreads();
+
+    // 2) warp 0 scans the 32 warp totals (same trick, one warp's worth)
+    if (warp == 0) {
+        float w = (lane &lt; blockDim.x / 32) ? warp_sums[lane] : 0.f;
+        for (int off = 1; off &lt; 32; off &lt;&lt;= 1) {
+            float u = __shfl_up_sync(0xffffffff, w, off);
+            if (lane &gt;= off) w += u;
+        }
+        warp_sums[lane] = w;
+    }
+    __syncthreads();
+
+    // 3) add the exclusive prefix of your warp's total
+    if (warp &gt; 0) v += warp_sums[warp - 1];
+    if (g &lt; n) out[g] = v;
+}</pre>
+          <ul>
+            <li><strong>The composition is the answer:</strong> scan within warps (no barriers, shuffles), scan the warp totals, add the prefix back. The same three-level shape extends to the grid: per-block sums → scan of block sums (tiny second kernel) → uniform add third kernel. Or a decoupled-lookback single pass, which is what CUB does — name it.</li>
+            <li><strong>Why <code>__shfl_up_sync</code>:</strong> lane i needs the value from lane i−off; the <code>lane &gt;= off</code> guard keeps low lanes' values unchanged, which is exactly Hillis-Steele.</li>
+            <li><strong>Scan matters because it looks serial</strong> — the interviewer is checking you can parallelize a dependency chain. Stream compaction, radix sort, and memory allocation all sit on top of it.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q9">
+        <div class="prob-head"><h3>9. Row-wise numerically stable softmax</h3><span class="tag hard">Hard — AI-lab favorite</span></div>
+        <p class="tests"><strong>Tests:</strong> numerical stability, multi-phase block cooperation, barrier-and-broadcast discipline.</p>
+        <p>For a <code>rows × cols</code> matrix, compute softmax along each row: <code>y = exp(x − max(x)) / Σexp(x − max(x))</code>. One block per row. Why the max subtraction, and where are the sync hazards?</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void softmax_rows(const float* __restrict__ X,
+                             float* __restrict__ Y, int cols) {
+    extern __shared__ float s[];                    // blockDim.x floats
+    const float* x = X + (size_t)blockIdx.x * cols; // this block's row
+    float*       y = Y + (size_t)blockIdx.x * cols;
+
+    // phase 1: row max (stability: exp(x - max) can't overflow)
+    float m = -INFINITY;
+    for (int i = threadIdx.x; i &lt; cols; i += blockDim.x)
+        m = fmaxf(m, x[i]);
+    s[threadIdx.x] = m; __syncthreads();
+    for (int st = blockDim.x / 2; st &gt; 0; st &gt;&gt;= 1) {
+        if (threadIdx.x &lt; st) s[threadIdx.x] = fmaxf(s[threadIdx.x], s[threadIdx.x + st]);
+        __syncthreads();
+    }
+    m = s[0];
+    __syncthreads();          // EVERYONE has read s[0] before phase 2 reuses s
+
+    // phase 2: exponentiate (stash in y) and sum
+    float sum = 0.f;
+    for (int i = threadIdx.x; i &lt; cols; i += blockDim.x) {
+        float e = __expf(x[i] - m);
+        y[i] = e;
+        sum += e;
+    }
+    s[threadIdx.x] = sum; __syncthreads();
+    for (int st = blockDim.x / 2; st &gt; 0; st &gt;&gt;= 1) {
+        if (threadIdx.x &lt; st) s[threadIdx.x] += s[threadIdx.x + st];
+        __syncthreads();
+    }
+    float inv = 1.f / s[0];
+
+    // phase 3: normalize in place
+    for (int i = threadIdx.x; i &lt; cols; i += blockDim.x) y[i] *= inv;
+}
+// launch: softmax_rows&lt;&lt;&lt;rows, 256, 256 * sizeof(float)&gt;&gt;&gt;(X, Y, cols);</pre>
+          <ul>
+            <li><strong>Why subtract the max:</strong> exp(1000) overflows to inf and the row becomes NaN; exp(x − max) ≤ 1 always. The result is mathematically identical — this is THE canonical numerical-stability question.</li>
+            <li><strong>The subtle barrier:</strong> the <code>__syncthreads()</code> after <code>m = s[0]</code> — without it a fast thread starts phase 2 and overwrites <code>s[0]</code> while slow threads are still reading the max. Interviewers plant exactly this hazard.</li>
+            <li><strong>Traffic accounting:</strong> stashing exp in <code>y</code> makes it 2 reads + 2 writes per element; fusing with a following op or keeping rows in registers/shared (when cols is small) is the optimization discussion. Online softmax (single-pass max+sum, the FlashAttention trick) is the strong-pass name-drop.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q10">
+        <div class="prob-head"><h3>10. Matrix–vector multiply, one warp per row</h3><span class="tag hard">Hard</span></div>
+        <p class="tests"><strong>Tests:</strong> choosing the work-to-thread mapping, warp-level reduction, coalescing within a row.</p>
+        <p>Compute <code>y = A·x</code> for an <code>N×M</code> matrix. One thread per row is the obvious mapping — why is it wrong, and what's better?</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void gemv_warp_per_row(const float* __restrict__ A,
+                                  const float* __restrict__ x,
+                                  float* __restrict__ y, int N, int M) {
+    int row  = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    int lane = threadIdx.x &amp; 31;
+    if (row &gt;= N) return;                 // whole warp exits together
+    const float* a = A + (size_t)row * M;
+    float acc = 0.f;
+    for (int j = lane; j &lt; M; j += 32)    // lanes read CONSECUTIVE floats
+        acc += a[j] * x[j];               // -&gt; coalesced
+    for (int off = 16; off &gt; 0; off &gt;&gt;= 1)
+        acc += __shfl_down_sync(0xffffffff, acc, off);
+    if (lane == 0) y[row] = acc;
+}
+// launch: 256-thread blocks -&gt; 8 rows per block, grid = ceil(N / 8)</pre>
+          <ul>
+            <li><strong>Why one thread per row fails:</strong> thread i would read <code>A[i*M + j]</code> — warp-neighbor threads are M floats apart, fully strided access, ~32× the traffic. The mapping, not the math, is the whole question.</li>
+            <li><strong>Warp-per-row fixes it:</strong> lanes stride through one row together, consecutive addresses, coalesced; the dot product finishes with a shuffle tree. For very wide rows use a block per row; for many short rows, a thread per row with A stored column-major. "It depends on M — here's the crossover reasoning" is the senior answer.</li>
+            <li><strong>The early return is safe</strong> because the division makes the whole warp share one row — no divergent exit. Worth saying aloud.</li>
+          </ul>
+        </div></details>
+      </article>
+    </section>
+
+    <!-- ================= DEBUG & HOST ================= -->
+    <section id="debug" class="section">
+      <h2>Debug &amp; host-side rounds</h2>
+      <p class="groupnote">Two formats that test judgment more than syntax: fix broken code you didn't write, and orchestrate the GPU from the host.</p>
+
+      <article class="prob" id="q11">
+        <div class="prob-head"><h3>11. Find the three bugs</h3><span class="tag hard">Debug round</span></div>
+        <p class="tests"><strong>Tests:</strong> race detection, boundary reasoning — reviewing code you didn't write, exactly like the job.</p>
+        <p>This kernel should compute a 3-point moving average: <code>out[i] = (in[i−1] + in[i] + in[i+1]) / 3</code> with clamped edges. It compiles, runs, and is wrong three different ways. Find all three.</p>
+<pre class="code">__global__ void smooth(const float* in, float* out, int n) {   // BUGGY
+    __shared__ float s[256];
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    s[threadIdx.x] = in[i];
+    if (threadIdx.x &gt; 0 &amp;&amp; threadIdx.x &lt; blockDim.x - 1)
+        out[i] = (s[threadIdx.x - 1] + s[threadIdx.x] + s[threadIdx.x + 1]) / 3.f;
+}</pre>
+        <details class="sol"><summary>Show the three bugs &amp; the fixed kernel</summary><div class="sol-body">
+          <ul>
+            <li><strong>Bug 1 — out-of-bounds read:</strong> <code>in[i]</code> has no <code>i &lt; n</code> guard; the last block reads (and the compute line writes) past the array.</li>
+            <li><strong>Bug 2 — race on shared memory:</strong> no <code>__syncthreads()</code> between the tile store and the neighbor reads. A thread can read <code>s[threadIdx.x ± 1]</code> before the neighboring <em>warp</em> has written it.</li>
+            <li><strong>Bug 3 — holes in the output:</strong> the edge threads of every block (<code>threadIdx.x == 0</code> and <code>blockDim.x − 1</code>) never write <code>out[i]</code> — two unwritten elements per block interior. The block needs halo data, not fewer writers.</li>
+          </ul>
+<pre class="code">__global__ void smooth_fixed(const float* __restrict__ in,
+                             float* __restrict__ out, int n) {
+    __shared__ float s[256 + 2];                    // + halo cells
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int c = threadIdx.x + 1;
+    s[c] = (i &lt; n) ? in[i] : 0.f;                             // bug 1 fixed
+    if (threadIdx.x == 0)                // left/right halo, edge-clamped
+        s[0]   = (i &gt; 0)                 ? in[i - 1]              : in[0];
+    if (threadIdx.x == blockDim.x - 1 || i == n - 1)
+        s[c+1] = (i + 1 &lt; n)             ? in[i + 1]              : in[n - 1];
+    __syncthreads();                                          // bug 2 fixed
+    if (i &lt; n)                                                // bug 3 fixed:
+        out[i] = (s[c - 1] + s[c] + s[c + 1]) / 3.f;          // all threads write
+}</pre>
+          <ul>
+            <li><strong>Interview meta:</strong> narrate a systematic sweep — bounds first, then every shared write→read edge needs a barrier, then "does every output element have exactly one writer?" That checklist finds all three without luck. Mention <code>compute-sanitizer</code> (racecheck) as the tool that catches bugs 1–2 mechanically.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q12">
+        <div class="prob-head"><h3>12. Host-side: pipeline 8 batches with streams</h3><span class="tag hard">Host round</span></div>
+        <p class="tests"><strong>Tests:</strong> pinned memory, stream semantics, double-buffered device memory, correct timing.</p>
+        <p>You must process 8 independent batches: upload → kernel → download each. Write host code that overlaps transfers with compute, and time the whole pipeline correctly.</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">const int  NB = 8;
+const size_t bytes = BATCH * sizeof(float);
+
+float *h_in, *h_out;
+cudaMallocHost(&amp;h_in,  NB * bytes);      // PINNED — or async is a lie
+cudaMallocHost(&amp;h_out, NB * bytes);
+
+float *d_in[2], *d_out[2];               // double-buffered device memory:
+for (int i = 0; i &lt; 2; ++i) {            // stream k uses buffer k % 2
+    cudaMalloc(&amp;d_in[i],  bytes);
+    cudaMalloc(&amp;d_out[i], bytes);
+}
+cudaStream_t st[2];
+cudaStreamCreate(&amp;st[0]); cudaStreamCreate(&amp;st[1]);
+
+cudaEvent_t t0, t1;
+cudaEventCreate(&amp;t0); cudaEventCreate(&amp;t1);
+cudaEventRecord(t0);                      // timing brackets the PIPELINE
+
+for (int b = 0; b &lt; NB; ++b) {
+    int k = b &amp; 1;                        // alternate stream + buffers
+    cudaMemcpyAsync(d_in[k], h_in + b * BATCH, bytes,
+                    cudaMemcpyHostToDevice, st[k]);
+    process&lt;&lt;&lt;grid, block, 0, st[k]&gt;&gt;&gt;(d_in[k], d_out[k], BATCH);
+    cudaMemcpyAsync(h_out + b * BATCH, d_out[k], bytes,
+                    cudaMemcpyDeviceToHost, st[k]);
+}
+cudaEventRecord(t1);
+cudaEventSynchronize(t1);                 // wait for EVERYTHING
+float ms; cudaEventElapsedTime(&amp;ms, t0, t1);</pre>
+          <ul>
+            <li><strong>Why buffer reuse is safe:</strong> batch b+2 reuses batch b's device buffers, but both are queued on the <em>same stream</em>, and streams execute in order — the copy for b+2 cannot start until b's work drained. Cross-batch safety comes free from stream ordering; say this explicitly.</li>
+            <li><strong>The three requirements for overlap:</strong> pinned host memory (else <code>cudaMemcpyAsync</code> silently stages and serializes), distinct streams (same-stream work is ordered), and hardware copy engines (all modern GPUs: at least one per direction).</li>
+            <li><strong>Timing correctness:</strong> events on the default timeline bracket the pipeline; a CPU timer without <code>cudaEventSynchronize</code>/<code>cudaDeviceSynchronize</code> measures launch overhead. This is the same async trap as the fake-4×-speedup case study.</li>
+            <li><strong>Expected speedup:</strong> if copies and compute are comparable, ~2–3× over serial; verify in nsys — the timeline should show copy engine and SMs busy simultaneously. Offering the verification unprompted is the strong-pass move.</li>
+          </ul>
+        </div></details>
+      </article>
+    </section>
+
+    <!-- ================= RESOURCES ================= -->
+    <section id="resources" class="section">
+      <h2>Where these questions come from</h2>
+      <div class="source-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
+        <article class="course"><h3>Interview reports</h3><p>Glassdoor's CUDA interview pages (NVIDIA and others) repeatedly cite reduction, memory hierarchy, synchronization, image rotation, and coalescing questions; prep guides put the coding rounds at LeetCode-medium in CUDA.</p><p><a href="https://www.glassdoor.com/Interview/cuda-interview-questions-SRCH_KO0,4.htm" target="_blank" rel="noopener">Glassdoor CUDA questions</a> | <a href="https://igotanoffer.com/en/advice/nvidia-software-engineer-interview" target="_blank" rel="noopener">NVIDIA interview process</a></p></article>
+        <article class="course"><h3>Practice at scale</h3><p>The "100 days of GPU kernels" repo grinds this exact question set daily; Simon Boehm's SGEMM worklog is problem 6 taken to cuBLAS level.</p><p><a href="https://github.com/a-hamdi/GPU" target="_blank" rel="noopener">100 days of GPU kernels</a> | <a href="https://siboehm.com/articles/22/CUDA-MMM" target="_blank" rel="noopener">SGEMM worklog</a></p></article>
+        <article class="course"><h3>Reference solutions</h3><p>CUB/Thrust contain the production versions of problems 3, 5, and 8 — read their docs after solving by hand; the CUDA best-practices guide covers every pattern used here.</p><p><a href="https://github.com/NVIDIA/cccl" target="_blank" rel="noopener">CCCL</a> | <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">Best practices</a></p></article>
+        <article class="course"><h3>Sibling pages</h3><p>The skills page drills the concepts these kernels exercise — profiler metrics, memory hierarchy, and 96 practice questions including principal-level case studies.</p><p><a href="gpu-kernel-skills.html">Skills &amp; MCQ practice</a> | <a href="index.html">Hub</a></p></article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Plain HTML/CSS/JS, no dependencies, works offline. Styles shared with the Isaac Sim study hub.</p>
+  </footer>
+</body>
+</html>
