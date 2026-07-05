@@ -92,8 +92,9 @@
         principal-level case studies — full profiler-report diagnosis, spot-the-bug reviews of unfamiliar
         kernels, and the judgment calls (when to push back, when to stop). Difficulty runs from recall up to
         applied reasoning with real numbers, and the formats mirror real assessments: single-answer
-        questions, <strong>select-all-that-apply</strong> combinations, and <strong>arrange-in-order</strong>
-        chains for workflows like APOD and the profile→classify→fix loop.
+        questions, <strong>select-all-that-apply</strong> combinations, <strong>arrange-in-order</strong>
+        chains for workflows like APOD and the profile→classify→fix loop, and
+        <strong>fill-in-the-blank</strong> completions of real kernel code and build/profiler commands.
       </p>
     </section>
 
@@ -129,6 +130,11 @@
         <div><dt>Latency hiding</dt><dd>The GPU's answer to memory latency: instead of caches and out-of-order execution, keep enough warps resident that some warp is always ready to issue while others wait.</dd></div>
         <div><dt>Independent thread scheduling</dt><dd>Since Volta, each thread has its own program counter, so lanes of a warp can interleave. Warp-level intrinsics therefore take an explicit mask and a <code>_sync</code> suffix (e.g. <code>__shfl_down_sync(0xffffffff, …)</code>).</dd></div>
         <div><dt>Tail effect</dt><dd>End-of-kernel (or end-of-wave) underutilization: the last wave of blocks doesn't fill all SMs, so achieved occupancy and throughput sag even though the kernel is otherwise healthy.</dd></div>
+        <div><dt>Active vs eligible warp</dt><dd>Active/resident = allocated on the SM; eligible = ready to issue <em>this cycle</em> (not stalled). Schedulers pick among eligible warps — performance is having an eligible warp every cycle, not merely many active ones.</dd></div>
+        <div><dt>ILP (instruction-level parallelism)</dt><dd>Independent instructions within one thread that overlap in the pipeline. The other latency-hiding currency besides warp count: a thread with 4 independent loads in flight hides as much latency as 4 threads with one each.</dd></div>
+        <div><dt>Predication</dt><dd>For short branches the compiler emits both sides as per-lane masked instructions instead of a real branch — no divergence penalty, which is why tiny <code>if</code> bodies are often free.</dd></div>
+        <div><dt>Cooperative groups</dt><dd>API objects for thread groupings (tile, warp, block, grid) each with their own <code>sync()</code> and collectives. Grid-wide sync exists but requires a cooperative launch that guarantees all blocks are co-resident.</dd></div>
+        <div><dt>Wave</dt><dd>One round of blocks that fit on the whole GPU simultaneously; a grid executes in ceil(blocks ÷ blocks-per-wave) waves. Runtime cliffs at wave boundaries are wave quantization.</dd></div>
       </dl>
 
       <h3 class="sub">Core concepts</h3>
@@ -198,6 +204,11 @@ warp 0 runs A, warp 1 runs B — different warps, no masking, no extra cost</pre
         <div><dt>Vectorized access</dt><dd><code>float4</code>/<code>int4</code> (128-bit) loads move 16 bytes per thread in one instruction — fewer instructions and fewer requests for the same bytes. Requires 16-byte alignment.</dd></div>
         <div><dt>Async copy (cp.async / TMA)</dt><dd>Ampere's <code>cp.async</code> copies global→shared without staging through registers; Hopper/Blackwell's TMA engine transfers whole tiles asynchronously, freeing threads and registers for compute.</dd></div>
         <div><dt>Pinned (page-locked) host memory</dt><dd>Host allocation that can't be paged out, enabling faster DMA transfers and true overlap of <code>cudaMemcpyAsync</code> with kernels via streams.</dd></div>
+        <div><dt>__restrict__</dt><dd>Programmer promise that pointers don't alias, freeing the compiler to cache and reorder loads (and route <code>const</code> pointers through the read-only path). A missing restrict is a common reason the compiler re-loads values it "should" have kept.</dd></div>
+        <div><dt>Unified (managed) memory</dt><dd><code>cudaMallocManaged</code>: one pointer valid on host and device, migrated on demand via page faults. Convenient; performing well needs <code>cudaMemPrefetchAsync</code> and access hints, or fault storms eat the win.</dd></div>
+        <div><dt>Zero-copy (mapped) memory</dt><dd>The device dereferences pinned host memory over PCIe on every access. Right for data touched exactly once; disastrous for anything reused — each access repays the full bus latency.</dd></div>
+        <div><dt>Line vs sector</dt><dd>A 128-byte cache line is four 32-byte sectors. Caches track lines; the memory system moves sectors — profiler traffic counts are in sectors, and unused sector bytes are the waste that coalescing metrics expose.</dd></div>
+        <div><dt>Alignment</dt><dd>Vector loads require naturally aligned addresses (<code>float4</code> → 16 bytes). <code>cudaMalloc</code> returns ≥256-byte-aligned pointers; it's the offset arithmetic afterwards (<code>ptr + 3</code>) that silently kills vectorization.</dd></div>
       </dl>
 
       <h3 class="sub">Core concepts</h3>
@@ -280,6 +291,12 @@ thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
         <div><dt>Roofline / arithmetic intensity</dt><dd>AI = FLOPs per byte of DRAM traffic. Below the ridge point (peak FLOPs ÷ peak bandwidth) a kernel is bandwidth-limited: more FLOP/s is impossible without raising reuse.</dd></div>
         <div><dt>Effective bandwidth</dt><dd>(bytes read + written) ÷ kernel time, compared to peak. Two lines of arithmetic that instantly say whether a memory-bound kernel is near the roof or leaving 5× on the table.</dd></div>
         <div><dt>Kernel replay</dt><dd>ncu re-runs the kernel several times to collect all counters; results assume repeatable behavior. Profile with locked clocks (<code>--clock-control</code>) for stable numbers.</dd></div>
+        <div><dt>PTX vs SASS</dt><dd>PTX is the portable virtual ISA; SASS is the real machine code per architecture. ncu's Source page correlates C++ ↔ SASS (build with <code>-lineinfo</code>) — register spills show up there as LDL/STL instructions.</dd></div>
+        <div><dt>-Xptxas -v</dt><dd>Compile-time report of registers/thread, shared memory, and spill bytes per kernel — the zero-cost first profiler. Check it before and after any register-pressure change.</dd></div>
+        <div><dt>Little's law (bytes in flight)</dt><dd>Concurrency needed = latency × bandwidth. A 500 ns, 1.6 TB/s memory system needs ~800 KB of requests in flight to saturate — the formal reason occupancy and ILP exist at all.</dd></div>
+        <div><dt>Issue rate / IPC</dt><dd>Instructions issued per scheduler per cycle. Low IPC with unsaturated pipes corroborates latency-bound; high IPC with busy math pipes corroborates compute-bound.</dd></div>
+        <div><dt>Baseline diff</dt><dd>ncu stores a profile as a baseline and diffs later runs metric by metric — turning "I think it's faster" into "sectors/req fell 31→4, DRAM rose 22%→81%".</dd></div>
+        <div><dt>Clock locking</dt><dd>Boost clocks vary run to run and with temperature; lock SM/memory clocks (<code>nvidia-smi -lgc</code>, ncu's clock control) for reproducible A/B numbers — or your "regression" may be thermal noise.</dd></div>
       </dl>
 
       <h3 class="sub">Core concepts</h3>
@@ -376,6 +393,10 @@ tiled SGEMM: O(N) reuse per element — lives right of the ridge</pre>
         <div><dt>CCCL (CUDA C++ Core Libraries)</dt><dd>Thrust (host-callable device-wide algorithms), CUB (warp/block/device building blocks you compose <em>inside</em> kernels: BlockReduce, BlockScan, DeviceRadixSort), libcu++ (<code>cuda::std::</code> atomics, barriers, pipelines).</dd></div>
         <div><dt>Streams &amp; CUDA Graphs</dt><dd>Streams order work and enable copy/compute overlap; graphs record a whole launch DAG and replay it with one call, killing per-launch CPU overhead for many small kernels.</dd></div>
         <div><dt>Double buffering</dt><dd>Ping-pong two shared-memory tiles: while computing on tile A, asynchronously load tile B (<code>cp.async</code>/TMA), then swap — overlapping the load latency with math.</dd></div>
+        <div><dt>Thread coarsening / register blocking</dt><dd>Each thread computes a small tile of outputs held in registers (e.g. 8×8), amortizing every shared/global load over more math — the standard step between shared-memory tiling and tensor-core kernels.</dd></div>
+        <div><dt>Warp specialization</dt><dd>Different warps of one block take different roles — producer warps drive TMA/<code>cp.async</code> loads while consumer warps compute, coordinated with barriers. The Hopper/Blackwell GEMM pipeline pattern.</dd></div>
+        <div><dt>Persistent kernel</dt><dd>Launch exactly enough blocks to fill the GPU once and loop over a work queue inside the kernel — removes per-launch overhead and keeps caches warm for streams of small tasks.</dd></div>
+        <div><dt>cudaOccupancyMaxPotentialBlockSize</dt><dd>Runtime API that suggests the block size maximizing occupancy for a kernel on the current GPU — a sane starting default; still measure, because maximum occupancy ≠ maximum performance.</dd></div>
       </dl>
 
       <h3 class="sub">Core concepts</h3>
@@ -461,6 +482,10 @@ double buffer:   [load T0]→[compute T0 ‖ cp.async T1]→[compute T1 ‖ load
         <div><dt>Extended / device lambdas</dt><dd><code>nvcc --extended-lambda</code> allows <code>__device__</code>-annotated lambdas passed to kernels or Thrust. Capture by value: a by-reference capture of host stack memory is garbage on the device.</dd></div>
         <div><dt>type_traits / static_assert</dt><dd>Fully usable in device code: constrain template kernels (<code>static_assert(std::is_floating_point_v&lt;T&gt;)</code>) and dispatch on type properties at compile time.</dd></div>
         <div><dt>cuda::std (libcu++)</dt><dd>Heterogeneous standard library: <code>cuda::std::atomic</code>, <code>cuda::std::barrier</code>, tuples, type traits — the same types usable in host and device code.</dd></div>
+        <div><dt>cudaError_t discipline</dt><dd>Every API call returns a status, and kernel launches report errors <em>asynchronously</em> — check <code>cudaGetLastError()</code> after the launch and a sync in tests, or failures surface later at some unrelated call. Wrap it all in a CUDA_CHECK macro.</dd></div>
+        <div><dt>RAII device buffers</dt><dd><code>std::unique_ptr</code> with a <code>cudaFree</code> deleter (or a small owning wrapper) makes device allocations leak-proof across early returns and exceptions — the host-side hygiene assessments look for.</dd></div>
+        <div><dt>constexpr lambdas</dt><dd>C++17 lambdas are implicitly <code>constexpr</code> where possible, so they can produce compile-time values used for tile geometry and <code>static_assert</code> checks.</dd></div>
+        <div><dt>std::visit</dt><dd>Applies a visitor over a <code>std::variant</code>'s alternatives — the type-safe replacement for tag-switch unions in host-side config and dispatch code.</dd></div>
       </dl>
 
       <h3 class="sub">Core concepts</h3>
@@ -518,6 +543,10 @@ if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B,
         <div><dt>TMA (Tensor Memory Accelerator)</dt><dd>Hopper/Blackwell hardware engine for bulk asynchronous global↔shared tile copies — no threads or registers spent on address math; pairs with <code>cuda::barrier</code>/pipelines.</dd></div>
         <div><dt>Blackwell (SM100/SM120)</dt><dd>Current NVIDIA generation (B200/GB200, RTX 50). Fifth-gen tensor cores add FP4/FP6 with microscaling formats; bigger L2; NVLink 5; data-center parts add dedicated tensor memory for MMA accumulators (<code>tcgen05</code> PTX).</dd></div>
         <div><dt>Compute capability</dt><dd>NVIDIA's architecture version (Ampere 8.x, Ada 8.9, Hopper 9.0, Blackwell 10.x/12.x). Compile fat binaries with PTX fallback so kernels run — then re-tune — on newer parts.</dd></div>
+        <div><dt>Fat binary &amp; PTX JIT</dt><dd><code>nvcc -gencode</code> embeds SASS for chosen architectures plus PTX; on a newer GPU the driver JIT-compiles the PTX. Code runs forward, but re-tune it — JIT'd PTX won't exploit new hardware features by magic.</dd></div>
+        <div><dt>warpSize</dt><dd>Built-in variable (CUDA and HIP) holding the actual lane width — the portable spelling of "32" for masks, shuffle offsets, and per-warp scratch sizing.</dd></div>
+        <div><dt>SPIR-V / DXIL</dt><dd>The binary shader IRs consumed by Vulkan and D3D12 respectively; GLSL/HLSL/Slang compile to them — the shader world's PTX analogue.</dd></div>
+        <div><dt>hipBLAS vs rocBLAS</dt><dd>rocBLAS is AMD's native BLAS; hipBLAS is the thin portability layer dispatching to rocBLAS or cuBLAS — the library half of a HIP port.</dd></div>
       </dl>
 
       <h3 class="sub">Core concepts</h3>
@@ -598,6 +627,18 @@ if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B,
 <script>
 const quizData = {
   arch: [
+    {
+      type: "blank",
+      q: "Complete the launch so every element of an n-element array gets a thread, for any n.",
+      pre: "int block = 256;\nint grid = ______;\nsaxpy<<<grid, block>>>(n, a, d_x, d_y);   // kernel guards with if (i < n)",
+      options: [
+        ["(n + block - 1) / block", true],
+        ["n / block", false],
+        ["n * block", false],
+        ["256", false]
+      ],
+      explain: "The grid must round UP: (n + block − 1) / block covers all n elements with at most block − 1 spare threads, which the kernel's guard masks off. Plain n / block truncates — for n = 1000 and block = 256 it launches 3 blocks = 768 threads and silently skips 232 elements, a bug that hides whenever n happens to be a multiple of the block size. n * block over-launches wildly, and a constant 256 ignores n entirely."
+    },
     {
       type: "multi",
       q: "Which of the following can limit a kernel's THEORETICAL occupancy?",
@@ -714,6 +755,30 @@ const quizData = {
     }
   ],
   mem: [
+    {
+      type: "blank",
+      q: "Complete the shared-memory tile so column-wise access is bank-conflict-free.",
+      pre: "__shared__ float tile[32][______];\n// loaded row-wise (coalesced), then read column-wise: tile[threadIdx.x][c]",
+      options: [
+        ["33", true],
+        ["32", false],
+        ["64", false],
+        ["16", false]
+      ],
+      explain: "With row stride 33, walking down a column advances the bank index by 33 mod 32 = 1 per row — all 32 accesses land in different banks, one cycle. Stride 32 puts every column element in the same bank (32-way conflict, 32 serialized cycles); 64 is just as bad (64 mod 32 = 0); 16 can't hold the data. One wasted float per row is the cheapest 32× speedup in GPU programming — and the reason you see [T][T+1] all over real kernels."
+    },
+    {
+      type: "blank",
+      q: "Fill in the alignment requirement for this vectorized load.",
+      pre: "const float4* v = reinterpret_cast<const float4*>(ptr);\nfloat4 x = v[i];        // ptr must be ______-byte aligned",
+      options: [
+        ["16", true],
+        ["4", false],
+        ["8", false],
+        ["256", false]
+      ],
+      explain: "Vector accesses require natural alignment — sizeof(float4) = 16 bytes; a misaligned reinterpret is undefined behavior and faults on the GPU. cudaMalloc returns ≥256-byte-aligned pointers, so fresh buffers are always safe; the danger is offset arithmetic afterwards — ptr + 3 floats is 12 bytes off and kills the cast. 4 and 8 are the alignments of float and float2; 256 is sufficient but not what the type requires."
+    },
     {
       type: "multi",
       q: "A kernel is DRAM-bandwidth-bound (memory SOL ~90%, sectors/request already ~4). Which changes actually reduce the bytes moved to and from DRAM?",
@@ -850,6 +915,42 @@ const quizData = {
     }
   ],
   prof: [
+    {
+      type: "blank",
+      q: "Complete the compile command that reports registers, shared memory, and spills per kernel.",
+      pre: "nvcc -O3 ______ kernel.cu",
+      options: [
+        ["-Xptxas -v", true],
+        ["-lineinfo", false],
+        ["--use_fast_math", false],
+        ["-G", false]
+      ],
+      explain: "-Xptxas -v makes the assembler print per-kernel resource usage — registers/thread, shared memory, and spill loads/stores — the zero-cost first check before and after any register-pressure change. -lineinfo adds source↔SASS correlation for profilers (useful, different job); --use_fast_math trades accuracy for speed; -G disables device optimization for debugging — never benchmark with it, it can be 10× slower."
+    },
+    {
+      type: "blank",
+      q: "Complete Little's law as applied to saturating a GPU memory system.",
+      pre: "bytes in flight required  ≈  memory latency  ×  ______",
+      options: [
+        ["memory bandwidth", true],
+        ["occupancy", false],
+        ["clock frequency", false],
+        ["cache line size", false]
+      ],
+      explain: "Concurrency = latency × bandwidth: a 500 ns, 1.6 TB/s memory system needs ~800 KB of outstanding requests to stay saturated. Occupancy and ILP are the mechanisms that create that outstanding traffic — they're how you satisfy the law, not terms in it. This one line explains why a latency-bound kernel with few warps and one load per thread can't reach peak bandwidth no matter how well it coalesces."
+    },
+    {
+      type: "blank",
+      q: "Complete the command to deep-profile only the GEMM kernel with the full metric set.",
+      pre: "ncu --set full ______ gemm ./app",
+      options: [
+        ["--kernel-name", true],
+        ["--metrics", false],
+        ["--target-processes", false],
+        ["--section", false]
+      ],
+      explain: "--kernel-name (short: -k) filters which kernel launches get profiled, by name or regex — essential because --set full replays each profiled kernel many times, so profiling everything makes the run painfully slow. --metrics and --section choose WHAT to collect rather than which kernel; --target-processes controls child-process attachment. Workflow reminder: you already know gemm is the right kernel because nsys said so."
+    },
     {
       type: "order",
       q: "Arrange the canonical profiler-guided optimization workflow for a kernel you did not write.",
@@ -1028,6 +1129,30 @@ const quizData = {
   ],
   opt: [
     {
+      type: "blank",
+      q: "Complete the warp reduction step so all 32 lanes participate.",
+      pre: "v += __shfl_down_sync(______, v, 16);",
+      options: [
+        ["0xffffffff", true],
+        ["32", false],
+        ["threadIdx.x", false],
+        ["0", false]
+      ],
+      explain: "The first argument is the participation mask — one bit per lane, so 0xffffffff means all 32. Since Volta's independent thread scheduling the mask is a correctness requirement, not a hint: it reconverges exactly those lanes before the exchange. 32 as a mask would name only lane 5; 0 names nobody; threadIdx.x is a lane id, not a mask. Portability note: on 64-lane HIP wavefronts the full mask is 64 bits — the width trap yet again."
+    },
+    {
+      type: "blank",
+      q: "Complete the grid-stride loop.",
+      pre: "for (int i = blockIdx.x * blockDim.x + threadIdx.x;\n     i < n;\n     i += ______)",
+      options: [
+        ["gridDim.x * blockDim.x", true],
+        ["blockDim.x", false],
+        ["gridDim.x", false],
+        ["warpSize", false]
+      ],
+      explain: "The stride is the total thread count of the launch, so the whole grid sweeps the array in consecutive coalesced waves and any grid size processes any n. Striding by blockDim.x makes every block walk the same elements — a correctness bug (duplicated work), not just a slowdown; gridDim.x and warpSize are the wrong quantities entirely. Bonus: with a machine-sized grid, each thread handles several elements — free ILP."
+    },
+    {
       type: "multi",
       q: "Nsight Compute shows a kernel is latency-bound: both SOL numbers low, warps mostly waiting. Which techniques address that diagnosis?",
       options: [
@@ -1174,6 +1299,30 @@ const quizData = {
   ],
   cpp: [
     {
+      type: "blank",
+      q: "Complete the compile-time branch in this template kernel.",
+      pre: "template <int TILE, bool RELU>\n__global__ void gemm_act(...) {\n  ...\n  if ______ acc = fmaxf(acc, 0.f);\n}",
+      options: [
+        ["constexpr (RELU)", true],
+        ["(RELU)", false],
+        ["consteval (RELU)", false],
+        ["constexpr (relu_arg)   // a runtime kernel parameter", false]
+      ],
+      explain: "if constexpr on the template parameter discards the disabled branch at instantiation — no instructions, no registers, and dependent code in the dead branch needn't even be valid. Plain if (RELU) usually optimizes away too but both branches must compile, and it signals runtime intent. consteval is C++20 and applies to functions, not if-statements (C++23's `if consteval` is something else entirely). And a runtime kernel argument isn't a constant expression — if constexpr on it is a compile error."
+    },
+    {
+      type: "blank",
+      q: "Complete the check that catches kernel-launch errors in a test harness.",
+      pre: "kernel<<<grid, block>>>(args);\nCUDA_CHECK( ______ );                    // launch/config errors\nCUDA_CHECK( cudaDeviceSynchronize() );   // async execution errors",
+      options: [
+        ["cudaGetLastError()", true],
+        ["cudaPeekAtLastError() == cudaSuccess", false],
+        ["cudaFree(0)", false],
+        ["errno", false]
+      ],
+      explain: "Kernel launches return void; cudaGetLastError() retrieves (and clears) the launch status — invalid configuration, too much shared memory, wrong device. The sync afterwards surfaces errors from the kernel's actual execution, which arrive asynchronously. Peek would work but comparing it to cudaSuccess yields a bool, which defeats a macro expecting a cudaError_t (and doesn't clear the sticky error); cudaFree(0) is an old hack for context init; errno is host-C, the GPU never touches it."
+    },
+    {
       type: "multi",
       q: "The role asks for fluency 'through C++17'. Which of these features are actually C++17 (not later)?",
       options: [
@@ -1268,6 +1417,42 @@ const quizData = {
     }
   ],
   port: [
+    {
+      type: "blank",
+      q: "Complete the HLSL compute-shader equivalent of CUDA's __shared__ tile.",
+      pre: "[numthreads(16, 16, 1)]\nvoid main(uint3 gtid : SV_GroupThreadID) {\n  ______ float tile[16][16];\n  ...\n}",
+      options: [
+        ["groupshared", true],
+        ["__shared__", false],
+        ["shared", false],
+        ["threadgroup", false]
+      ],
+      explain: "groupshared is HLSL's keyword for the per-group scratchpad — same hardware, same bank-conflict physics as CUDA shared memory. The wrong options are all real keywords from other languages: __shared__ is CUDA/HIP, shared is GLSL, threadgroup is Metal. One concept, four spellings — which is exactly why the mapping table is worth memorizing for a role that lists CUDA, HIP, Slang, HLSL, and GLSL in one sentence."
+    },
+    {
+      type: "blank",
+      q: "Complete the reduction loop so it is correct on both 32-lane NVIDIA warps and 64-lane CDNA wavefronts.",
+      pre: "for (int off = ______ / 2; off > 0; off >>= 1)\n  v += __shfl_down(v, off);   // HIP",
+      options: [
+        ["warpSize", true],
+        ["32", false],
+        ["64", false],
+        ["blockDim.x", false]
+      ],
+      explain: "warpSize is the built-in that reports the real lane width at runtime (32 on NVIDIA and RDNA, 64 on CDNA), so the tree starts at the right offset everywhere. Hardcoded 32 silently sums only half of a CDNA wavefront — wrong answers, found in production, usually months later; 64 breaks the NVIDIA build the same way; blockDim.x isn't a warp-level quantity at all. For compile-time sizing, templates on a WAVE_SIZE constant achieve the same portably."
+    },
+    {
+      type: "blank",
+      q: "Complete the nvcc flag to ship native machine code for Hopper (compute capability 9.0).",
+      pre: "nvcc -gencode arch=compute_90,code=______ kernel.cu",
+      options: [
+        ["sm_90", true],
+        ["compute_90", false],
+        ["sm_9.0", false],
+        ["hopper", false]
+      ],
+      explain: "code=sm_90 emits real SASS for that architecture — full performance, no JIT at load. code=compute_90 would embed PTX instead: forward-portable (the driver JIT-compiles it on future GPUs) but slower to start and unable to use newer hardware features, which is why fat binaries list several sm_XX targets plus one compute_XX fallback. The version has no dot in these names, and marketing names like 'hopper' aren't valid targets."
+    },
     {
       type: "multi",
       q: "A CUDA kernel is ported to a 64-lane CDNA wavefront via HIP. Which constructs are likely to break or silently miscompute?",
@@ -1660,6 +1845,7 @@ function renderQuestion(container, item, number, sectionKey) {
   if (item.type === "multi") return renderMulti(container, item, number, sectionKey);
   if (item.type === "order") return renderOrder(container, item, number, sectionKey);
   const card = el("article", "quiz-card");
+  if (item.type === "blank") card.appendChild(el("span", "qtype", "Fill in the blank"));
   card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
   if (item.pre) card.appendChild(el("pre", "qpre", item.pre));
   const optionsBox = el("div", "options");
