@@ -170,6 +170,23 @@ warp timeline:   A: █░█░█░█░ ... (odd lanes masked off)
 if ((threadIdx.x / 32) % 2 == 0) ...            // splits between warps
 warp 0 runs A, warp 1 runs B — different warps, no masking, no extra cost</pre>
 
+      <p class="diagram-title">Sequence diagram — a kernel launch is asynchronous</p>
+      <pre class="diagram">CPU (host)                                GPU (stream s)
+────┬─────                                ────┬─────────
+    │ cudaMemcpyAsync(d_x, h_x, H2D, s) ──▶ [ queued: copy ]      each call
+    │ kernel&lt;&lt;&lt;grid, block, 0, s&gt;&gt;&gt;(…)  ──▶ [ queued: kernel ]    returns
+    │ cudaMemcpyAsync(h_y, d_y, D2H, s) ──▶ [ queued: copy ]      immediately
+    │                                         │
+    │ … CPU free to prepare next batch …      │ H2D copy runs
+    │                                         │ kernel runs      in-order
+    │                                         │ D2H copy runs    within s
+    │ cudaStreamSynchronize(s) ── blocks ──── ▼
+    │ ◀────────────────── stream drained ─────┘
+    ▼ h_y is valid HERE — reading it before the sync is a race
+
+timing corollary: a CPU timer stopped before the sync measures ~launch
+overhead, not the kernel — the classic fake-speedup bug</pre>
+
       <div class="link-list">
         <a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/" target="_blank" rel="noopener">CUDA C++ Programming Guide</a>
         <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">CUDA C++ Best Practices Guide</a>
@@ -253,6 +270,23 @@ thread 1 → t[1][c]  bank c   ← 32-way conflict: 32 serialized cycles
 ...
 fix:  __shared__ float t[32][33];    row stride 33 → column walks banks
 thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
+
+      <p class="diagram-title">Data flow — the life of one global load</p>
+      <pre class="diagram">warp issues LDG ──▶ coalescer merges 32 addresses into sectors
+                          │
+                          ▼                        data returns
+                   L1 (per SM) ── hit ~30 cy ──────▶ registers
+                          │ miss
+                          ▼
+                   L2 (device-wide) ── hit ~200 cy ─▶ L1 ─▶ registers
+                          │ miss
+                          ▼
+                   DRAM  ~400–800 cy ──▶ L2 ─▶ L1 ─▶ registers
+
+meanwhile: the warp parks with a Long Scoreboard stall from issue until
+the data lands; the scheduler issues OTHER warps — if none are eligible,
+the SM idles and the kernel is latency-bound.
+every arrow moves 32-byte sectors: waste in a sector = waste at every level</pre>
 
       <div class="link-list">
         <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#memory-optimizations" target="_blank" rel="noopener">Best Practices: memory optimizations</a>
@@ -340,6 +374,24 @@ Wait              fixed-latency ALU dependency    unroll, more independent ops
 LG/MIO Throttle   memory-instruction queue full   vectorize (fewer, wider ops)
 Not Selected      nothing — spare eligible warp   benign; enough parallelism
 No Instruction    instruction fetch               rare: shrink giant kernels</pre>
+
+      <p class="diagram-title">Nsight Compute drill-down — which page to open next</p>
+      <pre class="diagram">open report ──▶ GPU Speed of Light (the summary verdict)
+                    │
+    ┌───────────────┼──────────────────────┐
+    ▼               ▼                      ▼
+ SM% high       Memory% high          both low
+    │               │                      │
+    ▼               ▼                      ▼
+ Compute        Memory Workload        Warp State Statistics
+ Workload       Analysis chart         → which stall dominates?
+ Analysis       → which level is           │
+ → which pipe?    near peak?               ├─ Barrier → launch shape
+    │               ├─ DRAM → sectors/req  ├─ Long Scoreboard →
+    ▼               ├─ L2   → redundancy   │    Occupancy section:
+ Source page        └─ L1/shared →         │    what limits warps?
+ (needs -lineinfo):   bank conflicts       └─ Throttle → vectorize
+ WHICH LINE causes the traffic/stall — end every drill-down here</pre>
 
       <p class="diagram-title">Roofline — what the position tells you</p>
       <pre class="diagram">attainable            ridge point = peak FLOPs / peak BW
@@ -444,6 +496,21 @@ double buffer:   [load T0]→[compute T0 ‖ cp.async T1]→[compute T1 ‖ load
                   loads ride under compute; steady state hides them entirely
                   (Hopper/Blackwell: TMA moves whole tiles without using threads)</pre>
 
+      <p class="diagram-title">Timeline — copy/compute overlap with two streams</p>
+      <pre class="diagram">one stream (everything serialized):
+  ──[H2D₁]──[K₁]──[D2H₁]──[H2D₂]──[K₂]──[D2H₂]──▶ t
+
+two streams + pinned host memory (software pipeline):
+  copy engine:  [H2D₁][H2D₂]      [D2H₁][D2H₂]
+  SMs:                [K₁   ][K₂   ]
+  stream S1:    [H2D₁]—[K₁]———[D2H₁]
+  stream S2:          [H2D₂]—[K₂]———[D2H₂]
+  ───────────────────────────────────────────▶ t
+
+steady state: batch k+1 uploads WHILE batch k computes — transfers vanish
+from the critical path. requirements: pinned buffers (else async silently
+degrades), separate streams (else in-order), enough batches to fill the pipe</pre>
+
       <div class="link-list">
         <a href="https://developer.nvidia.com/blog/cuda-pro-tip-write-flexible-kernels-grid-stride-loops/" target="_blank" rel="noopener">Grid-stride loops</a>
         <a href="https://developer.nvidia.com/blog/using-cuda-warp-level-primitives/" target="_blank" rel="noopener">Warp-level primitives</a>
@@ -509,6 +576,24 @@ __global__ void fused_gemm_act(const float* A, const float* B, float* C, int n) 
 // host dispatch over a closed set of instantiations:
 if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B, C, n);</pre>
 
+      <p class="diagram-title">Call flow — a well-structured host harness (RAII + error checks)</p>
+      <pre class="diagram">run_gemm(h_A, h_B, n)
+ ├─ DeviceBuffer d_A(n), d_B(n), d_C(n)     // RAII: cudaMalloc in ctor,
+ │                                          //       cudaFree in dtor
+ ├─ CUDA_CHECK( cudaMemcpyAsync(d_A, h_A, …, stream) )
+ ├─ CUDA_CHECK( cudaMemcpyAsync(d_B, h_B, …, stream) )
+ ├─ gemm&lt;&lt;&lt;grid, block, 0, stream&gt;&gt;&gt;(d_A, d_B, d_C, n)
+ │   ├─ CUDA_CHECK( cudaGetLastError() )        // launch/config errors
+ │   └─ (execution errors surface at the next sync ↓)
+ ├─ CUDA_CHECK( cudaMemcpyAsync(h_C, d_C, …, stream) )
+ ├─ CUDA_CHECK( cudaStreamSynchronize(stream) ) // waits + reports kernel errors
+ └─ return h_C
+      ▲ any CUDA_CHECK failure throws → stack unwinds →
+        DeviceBuffer destructors free d_A/d_B/d_C — no leak on ANY path
+
+the pattern under test in C++ questions: value types own resources,
+every API result is checked, async errors are surfaced deliberately</pre>
+
       <div class="link-list">
         <a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#c-language-extensions" target="_blank" rel="noopener">CUDA C++ language extensions</a>
         <a href="https://nvidia.github.io/cccl/libcudacxx/" target="_blank" rel="noopener">libcu++ documentation</a>
@@ -573,6 +658,22 @@ if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B,
         </table>
       </div>
 
+      <p class="diagram-title">Data flow — how one kernel source becomes GPU machine code</p>
+      <pre class="diagram">CUDA C++ ──nvcc──▶ PTX (virtual ISA) ──driver JIT──▶ SASS ─▶ NVIDIA GPU
+              └───▶ SASS directly (code=sm_XX, no JIT) ──────▶ NVIDIA GPU
+
+HIP C++ ──hipcc──▶ AMD GCN/CDNA ISA ─────────────────────────▶ AMD GPU
+              └──▶ (via CUDA path above) ────────────────────▶ NVIDIA GPU
+
+Slang ──┬──▶ HLSL ──DXC──▶ DXIL ────▶ D3D12 driver ──▶ any D3D12 GPU
+        ├──▶ SPIR-V ────────────────▶ Vulkan driver ──▶ any Vulkan GPU
+        └──▶ CUDA source ──▶ (top row)
+GLSL ──glslang──▶ SPIR-V ───────────▶ Vulkan driver
+
+three portable IR tiers: PTX (NVIDIA), DXIL (D3D12), SPIR-V (Vulkan) —
+the driver does the final arch-specific codegen, which is why the same
+binary runs on next year's GPU but doesn't automatically exploit it</pre>
+
       <div class="link-list">
         <a href="https://rocm.docs.amd.com/projects/HIP/en/latest/" target="_blank" rel="noopener">HIP documentation</a>
         <a href="https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_porting_guide.html" target="_blank" rel="noopener">HIP porting guide</a>
@@ -602,6 +703,24 @@ if (tile == 32) fused_gemm_act&lt;32, true&gt;&lt;&lt;&lt;g, b&gt;&gt;&gt;(A, B,
         <article class="term-card"><h3>Correctness is non-negotiable</h3><p>You'll often optimize kernels whose algorithms you don't fully know. Golden outputs captured before the first change, re-validated after every change — including edge sizes (n not a multiple of the block). A 4× speedup that's 1% wrong is worth exactly nothing.</p></article>
         <article class="term-card"><h3>Know when you're done</h3><p>At the roofline with clean access patterns, the honest deliverable is "finished, and here's the evidence" plus what an algorithmic change would buy. Saying no to further tuning — with metrics — is a principal-level answer, not a cop-out.</p></article>
       </div>
+
+      <p class="diagram-title">Data flow — the golden-output loop that makes optimization safe</p>
+      <pre class="diagram">                 ┌────────────────────────── once, before touching anything
+                 ▼
+original kernel ──▶ outputs on fixed seeds/sizes ──▶ golden files
+                                                        │
+   ┌── optimize one thing ◀── profile ◀── baseline ◀────┘
+   ▼
+candidate kernel ──▶ outputs ──▶ compare vs golden (abs/rel TOLERANCE)
+                                    │
+                        pass ──▶ commit, re-profile, next bottleneck ─┐
+                        fail ──▶ revert/fix — its speed is irrelevant │
+   ▲                                                                  │
+   └──────────────────────────────────────────────────────────────────┘
+
+include edge sizes (n not a multiple of block) — that's where guards break.
+FP caveat: reordered math (tree reductions, FMA, TF32) is bitwise different
+by design — compare with tolerance, never memcmp</pre>
 
       <h3 class="sub">Practice questions</h3>
       <span class="sec-score" id="sec-score-case">Section score: 0 / 0</span>
