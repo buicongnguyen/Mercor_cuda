@@ -321,26 +321,27 @@
 <defs><marker id="d5m" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker><marker id="d5w" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--warn)"/></marker></defs>
 <rect x="150" y="26" width="150" height="30" rx="6" class="box"/>
 <text x="162" y="46" class="t12" style="font-weight:bold">registers</text>
-<text x="312" y="46" class="t11 mut">per thread · ~1 cycle · compiler-managed</text>
+<text x="312" y="46" class="t11 mut">per thread · ~1 cycle</text>
 <rect x="150" y="64" width="230" height="30" rx="6" class="box"/>
 <text x="162" y="84" class="t12" style="font-weight:bold">shared memory</text>
-<text x="392" y="84" class="t11 mut">per block · ~20–30 cy · you stage it</text>
+<text x="392" y="84" class="t11 mut">per block · ~20–30 cy</text>
 <rect x="150" y="102" width="300" height="30" rx="6" class="box"/>
 <text x="162" y="122" class="t12" style="font-weight:bold">L1 cache</text>
-<text x="462" y="122" class="t11 mut">per SM · ~30 cy · hardware</text>
-<rect x="150" y="140" width="380" height="30" rx="6" class="box"/>
+<text x="462" y="122" class="t11 mut">per SM · ~30 cy</text>
+<rect x="150" y="140" width="370" height="30" rx="6" class="box"/>
 <text x="162" y="160" class="t12" style="font-weight:bold">L2 cache</text>
-<text x="542" y="160" class="t11 mut">whole device · ~200 cy · hardware</text>
-<rect x="150" y="178" width="470" height="30" rx="6" class="box"/>
+<text x="532" y="160" class="t11 mut">whole device · ~200 cy</text>
+<rect x="150" y="178" width="420" height="30" rx="6" class="box"/>
 <text x="162" y="198" class="t12" style="font-weight:bold">global DRAM</text>
-<text x="632" y="198" class="t11 mut">whole device · 400–800 cy · your access patterns</text>
+<text x="582" y="198" class="t11 mut">whole device · 400–800 cy</text>
 <line x1="110" y1="196" x2="110" y2="36" class="ln" marker-end="url(#d5m)"/>
 <text x="52" y="42" class="t11 acs">fastest</text>
 <text x="52" y="200" class="t11 mut">largest</text>
+<text x="470" y="44" class="t11 wtxt">"local memory" = register spills —</text>
+<text x="470" y="58" class="t11 mut">it lives in DRAM (cached), not fast</text>
+<line x1="560" y1="66" x2="560" y2="174" class="lnw dash" marker-end="url(#d5w)"/>
 <rect x="150" y="218" width="520" height="26" rx="6" class="box2 dash"/>
 <text x="162" y="236" class="t11 mut">host RAM over PCIe — microseconds; batch transfers, overlap with compute</text>
-<line x1="330" y1="252" x2="380" y2="212" class="lnw" marker-end="url(#d5w)"/>
-<text x="338" y="264" class="t11 wtxt">"local memory" (register spills) lives in DRAM — cached, not fast</text>
 </svg>
 
       <p class="diagram-title">Bank conflicts — column access into a shared tile</p>
@@ -378,7 +379,7 @@ thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
 <line x1="340" y1="183" x2="536" y2="134" class="lna" marker-end="url(#d6a)"/>
 <text x="452" y="166" class="t11 acs">hit · ~200 cy</text>
 <line x1="340" y1="241" x2="536" y2="140" class="lna" marker-end="url(#d6a)"/>
-<text x="462" y="222" class="t11 acs">~400–800 cy</text>
+<text x="348" y="228" class="t11 acs">~400–800 cy</text>
 <rect x="420" y="212" width="326" height="64" rx="6" class="box2 dash"/>
 <text x="432" y="232" class="t11 mut">meanwhile: warp parked — Long Scoreboard stall;</text>
 <text x="432" y="248" class="t11 mut">the scheduler issues other warps instead;</text>
@@ -513,7 +514,7 @@ thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
 <line x1="70" y1="250" x2="70" y2="34" class="ln" marker-end="url(#d9m)"/>
 <text x="20" y="44" class="t11 mut">attainable</text>
 <text x="20" y="58" class="t11 mut">FLOP/s</text>
-<text x="500" y="284" class="t11 mut">arithmetic intensity (FLOP / byte of DRAM traffic)</text>
+<text x="440" y="284" class="t11 mut">arithmetic intensity (FLOP / byte of DRAM traffic)</text>
 <line x1="70" y1="250" x2="400" y2="90" class="lna"/>
 <line x1="400" y1="90" x2="730" y2="90" class="lna"/>
 <line x1="400" y1="90" x2="400" y2="250" class="ln dash"/>
@@ -525,7 +526,8 @@ thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
 <text x="222" y="178" class="t11 wtxt">K1 — memory-bound:</text>
 <text x="222" y="192" class="t11 mut">only more reuse (fuse, tile) raises FLOP/s</text>
 <circle cx="560" cy="106" r="6" style="fill:var(--accent-soft);stroke:var(--accent-strong);stroke-width:2"/>
-<text x="572" y="112" class="t11 acs">K2 — compute-bound: cheaper math helps</text>
+<text x="572" y="104" class="t11 acs">K2 — compute-bound:</text>
+<text x="572" y="118" class="t11 acs">cheaper math helps</text>
 <circle cx="95" cy="238" r="4" style="fill:var(--warn)"/>
 <text x="106" y="242" class="t11 mut">SAXPY ≈ 0.17 FLOP/B — hopeless prisoner of the slope</text>
 </svg>
@@ -812,7 +814,7 @@ every API result is checked, async errors are surfaced deliberately</pre>
 <rect x="330" y="24" width="80" height="28" rx="6" class="box2"/><text x="370" y="43" text-anchor="middle" class="t12">SASS</text>
 <line x1="410" y1="38" x2="616" y2="38" class="ln" marker-end="url(#dcm)"/>
 <rect x="620" y="24" width="126" height="28" rx="6" class="box"/><text x="683" y="43" text-anchor="middle" class="t12">NVIDIA GPU</text>
-<path d="M64 52 L64 74 L322 74 L322 56" fill="none" class="ln dash" marker-end="url(#dcm)"/>
+<path d="M64 52 L64 74 L370 74 L370 56" fill="none" class="ln dash" marker-end="url(#dcm)"/>
 <text x="80" y="88" class="t11 mut">-gencode code=sm_XX → SASS directly, no JIT, full tuning</text>
 <rect x="14" y="108" width="100" height="28" rx="6" class="box"/><text x="64" y="127" text-anchor="middle" class="t12">HIP C++</text>
 <line x1="114" y1="122" x2="176" y2="122" class="ln" marker-end="url(#dcm)"/><text x="145" y="116" text-anchor="middle" class="t11 mut">hipcc</text>
@@ -833,7 +835,8 @@ every API result is checked, async errors are surfaced deliberately</pre>
 <rect x="330" y="244" width="80" height="28" rx="6" class="box2"/><text x="370" y="263" text-anchor="middle" class="t12">SPIR-V</text>
 <line x1="410" y1="258" x2="616" y2="258" class="ln" marker-end="url(#dcm)"/><text x="513" y="252" text-anchor="middle" class="t11 mut">Vulkan driver</text>
 <rect x="620" y="244" width="126" height="28" rx="6" class="box"/><text x="683" y="263" text-anchor="middle" class="t12">any Vulkan GPU</text>
-<text x="14" y="300" class="t11 mut">three portable IRs — PTX · DXIL · SPIR-V — the driver does final codegen: the binary runs on next year's GPU, but re-tune it. Slang also emits SPIR-V (dashed), CUDA &amp; Metal.</text>
+<text x="14" y="294" class="t11 mut">three portable IRs — PTX · DXIL · SPIR-V — the driver does the final architecture-specific codegen:</text>
+<text x="14" y="308" class="t11 mut">the binary runs on next year's GPU, but re-tune it · Slang also emits SPIR-V (dashed), CUDA &amp; Metal</text>
 </svg>
 
       <div class="link-list">
@@ -887,7 +890,8 @@ every API result is checked, async errors are surfaced deliberately</pre>
 <path d="M653 134 L653 226 L40 226 L40 118 L76 118" fill="none" class="ln dash" marker-end="url(#ddm)"/>
 <text x="346" y="220" text-anchor="middle" class="t11 mut">iterate — the bottleneck moves after every fix</text>
 <path d="M316 191 L160 191 L160 138" fill="none" class="lnw dash" marker-end="url(#ddw)"/>
-<text x="14" y="262" class="t11 mut">FP caveat: tree reductions / FMA / TF32 reorder math — bitwise-different by design. Compare with abs/rel tolerance, never memcmp; include edge sizes (n not a multiple of the block).</text>
+<text x="14" y="256" class="t11 mut">FP caveat: tree reductions / FMA / TF32 reorder math — results are bitwise-different by design.</text>
+<text x="14" y="270" class="t11 mut">Compare with abs/rel tolerance, never memcmp; include edge sizes (n not a multiple of the block).</text>
 </svg>
 
       <h3 class="sub">Practice questions</h3>
