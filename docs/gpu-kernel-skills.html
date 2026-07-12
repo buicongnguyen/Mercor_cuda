@@ -63,6 +63,8 @@
     .gfx .dash { stroke-dasharray:4 3; }
     .explain { display:none; margin:10px 0 0; padding:10px 12px; border-left:3px solid var(--accent); background:var(--accent-soft); border-radius:0 6px 6px 0; color:var(--text); }
     .explain.show { display:block; }
+    .q-source { margin:8px 0 0; font-size:12px; color:var(--muted); }
+    .q-source a { font-weight:700; }
     .show-all .explain { display:block; }
     .show-all .options button[data-correct="1"] { border-color:var(--accent-strong); background:var(--accent-soft); color:var(--accent-strong); font-weight:700; }
     .verdict { font-weight:700; }
@@ -85,6 +87,8 @@
     <nav aria-label="Site navigation">
       <a href="index.html">Hub</a>
       <a href="coding-practice.html">Coding</a>
+      <a href="coding-practice.html#reasoning">Reasoning Atlas</a>
+      <a href="mock-assessment.html">Mock Assessment</a>
       <a href="#arch">SIMT</a>
       <a href="#mem">Memory</a>
       <a href="#prof">Profiling</a>
@@ -160,7 +164,7 @@
         <article class="term-card"><h3>What limits occupancy</h3><p>Three per-SM budgets: registers (64K × 32-bit — at 128 registers/thread only 512 threads fit), shared memory (a 48 KB/block kernel on a 100 KB SM fits 2 blocks), and block slots (max blocks per SM). The occupancy calculator in Nsight Compute shows which budget binds. Fixes: fewer registers (<code>__launch_bounds__</code>), smaller tiles, or different block sizes — but verify the fix didn't cause register spills.</p></article>
         <article class="term-card"><h3>Blocks are independent by contract</h3><p>Blocks may run in any order, on any SM, possibly never concurrently. "Block 0 produces, block 1 consumes" is a race or deadlock. Grid-wide agreement = end the kernel and launch another (launches on one stream are ordered), or atomics designed for it. This contract is what lets the same binary scale from 10 SMs to 150.</p></article>
         <article class="term-card"><h3>Divergence: cost and cures</h3><p>Divergence cost is proportional to how many distinct paths a warp executes. Cures: sort/partition work so warp-mates take the same branch, convert short branches to predication (compilers do this for small <code>if</code>s automatically), move uniform decisions out of the kernel via template parameters, and remember: a branch on <code>blockIdx</code> or on a value uniform across the warp costs nothing.</p></article>
-        <article class="term-card"><h3>Barriers and their scope</h3><p><code>__syncthreads()</code> synchronizes one block, and every thread of the block must reach it — calling it inside a divergent branch is undefined behavior (historically a deadlock). Warp-level exchanges don't need it: shuffles are already synchronized by their mask. Cooperative groups generalize the idea (tile, block, grid scopes) with explicit group objects.</p></article>
+        <article class="term-card"><h3>Barriers and their scope</h3><p><code>__syncthreads()</code> synchronizes one block, and every thread of the block must reach it — calling it inside a divergent branch is undefined behavior (historically a deadlock). A <code>__shfl_sync</code> converges the lanes named by its mask for that register exchange, so a register-only shuffle reduction needs no shared-memory barrier; it does <em>not</em> provide memory ordering. Use <code>__syncwarp()</code> when lanes communicate through memory. Cooperative groups generalize the idea (tile, block, grid scopes) with explicit group objects.</p></article>
       </div>
 
       <p class="diagram-title">Execution hierarchy and where things live</p>
@@ -195,6 +199,31 @@
 <text x="506" y="168" class="t12">128 regs/thread ⇒ 512 threads</text>
 <text x="506" y="186" class="t12 acs">= 16 of 48 warps → 33% occupancy</text>
 </svg>
+
+      <figure class="study-figure" aria-labelledby="latency-hiding-caption">
+        <figcaption id="latency-hiding-caption">Latency hiding — the load stays slow, but the SM stays busy</figcaption>
+        <p class="sr-only">With only one warp, a long memory wait leaves the scheduler idle. With four resident warps, their loads and uses interleave so each warp still waits but the scheduler keeps issuing eligible work.</p>
+        <div class="scheduler-panel" aria-hidden="true">
+          <strong>One resident warp: exposed latency creates an idle bubble</strong>
+          <div class="scheduler-row">
+            <span class="scheduler-label">Warp 0</span>
+            <div class="scheduler-track">
+              <span class="scheduler-cell load" style="grid-column:1">LDG</span>
+              <span class="scheduler-cell wait" style="grid-column:2 / span 5">Long Scoreboard wait</span>
+              <span class="scheduler-cell use" style="grid-column:7 / span 2">use data</span>
+            </div>
+          </div>
+        </div>
+        <div class="scheduler-panel" aria-hidden="true">
+          <strong>Four resident warps: independent waits overlap</strong>
+          <div class="scheduler-row"><span class="scheduler-label">Warp 0</span><div class="scheduler-track"><span class="scheduler-cell load" style="grid-column:1">LDG</span><span class="scheduler-cell wait" style="grid-column:2 / span 3">wait</span><span class="scheduler-cell use" style="grid-column:5">use</span></div></div>
+          <div class="scheduler-row"><span class="scheduler-label">Warp 1</span><div class="scheduler-track"><span class="scheduler-cell load" style="grid-column:2">LDG</span><span class="scheduler-cell wait" style="grid-column:3 / span 3">wait</span><span class="scheduler-cell use" style="grid-column:6">use</span></div></div>
+          <div class="scheduler-row"><span class="scheduler-label">Warp 2</span><div class="scheduler-track"><span class="scheduler-cell load" style="grid-column:3">LDG</span><span class="scheduler-cell wait" style="grid-column:4 / span 3">wait</span><span class="scheduler-cell use" style="grid-column:7">use</span></div></div>
+          <div class="scheduler-row"><span class="scheduler-label">Warp 3</span><div class="scheduler-track"><span class="scheduler-cell load" style="grid-column:4">LDG</span><span class="scheduler-cell wait" style="grid-column:5 / span 3">wait</span><span class="scheduler-cell use" style="grid-column:8">use</span></div></div>
+          <div class="scheduler-row"><span class="scheduler-label">Scheduler</span><div class="scheduler-track"><span class="scheduler-cell issue">W0</span><span class="scheduler-cell issue">W1</span><span class="scheduler-cell issue">W2</span><span class="scheduler-cell issue">W3</span><span class="scheduler-cell issue">W0</span><span class="scheduler-cell issue">W1</span><span class="scheduler-cell issue">W2</span><span class="scheduler-cell issue">W3</span></div></div>
+        </div>
+        <p class="figure-note">Latency is unchanged; occupancy and ILP create eligible work that fills the wait.</p>
+      </figure>
 
       <p class="diagram-title">Warp divergence — both sides run, lanes masked</p>
       <svg class="gfx" viewBox="0 0 760 216" role="img" aria-label="Warp divergence">
@@ -315,6 +344,29 @@
 <text x="580" y="184" class="t11 mut">(8 of 32 shown)</text>
 <text x="14" y="228" class="t12 mut">ncu "sectors per request": ≈4 is ideal for 32-bit accesses — 32 means fix the layout (SoA, tiling)</text>
 </svg>
+
+      <figure class="study-figure" aria-labelledby="aos-soa-caption">
+        <figcaption id="aos-soa-caption">AoS versus SoA — the same 128 useful bytes, very different traffic</figcaption>
+        <p class="sr-only">A warp reading the x field from 32 sixteen-byte structures touches sixteen 32-byte sectors and uses only 25 percent of each. A structure-of-arrays layout touches four sectors and uses all bytes.</p>
+        <div class="sector-compare" aria-hidden="true">
+          <div class="sector-panel">
+            <strong>AoS: <code>p[lane].x</code></strong>
+            <div class="sector-grid aos">
+              <span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span>
+              <span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span>
+              <span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span>
+              <span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span>
+            </div>
+            <div class="sector-stats"><span>16 sectors · 512 B moved</span><span>25% useful</span></div>
+          </div>
+          <div class="sector-panel">
+            <strong>SoA: <code>x[lane]</code></strong>
+            <div class="sector-grid soa"><span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span><span class="sector-cell"></span></div>
+            <div class="sector-stats"><span>4 sectors · 128 B moved</span><span>100% useful</span></div>
+          </div>
+        </div>
+        <div class="figure-legend" aria-hidden="true"><span><i class="legend-swatch target"></i>useful bytes</span><span><i class="legend-swatch other"></i>bytes fetched but unused</span></div>
+      </figure>
 
       <p class="diagram-title">Storage levels — scope and rough latency</p>
       <svg class="gfx" viewBox="0 0 760 270" role="img" aria-label="Memory hierarchy ladder">
@@ -438,9 +490,30 @@ thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
         <article class="term-card"><h3>The SOL triage</h3><p>SM% high → compute-bound: cheaper/lower-precision math, tensor cores, better algorithm. Memory% high → memory-bound: find the saturated level and reduce its traffic. Both low → latency-bound: more parallelism (occupancy, ILP, several elements per thread), fix divergence, split serialized atomics. Both high → the kernel is balanced and near the roof; only algorithmic change helps. This one chart picks which section of the playbook applies.</p></article>
         <article class="term-card"><h3>Reading L2 metrics honestly</h3><p>High L2 hit rate is good news only if L2 <em>traffic matters</em>. Pure streaming kernels (each byte used once) show low hit rates — expected, not fixable, and not worth chasing. Conversely a great hit rate can hide a bug: massively redundant loads that L2 absorbs still burn L2 bandwidth — check whether L2 throughput itself is the saturated ceiling. The honest chain: which level is nearest peak → what traffic hits it → is that traffic necessary?</p></article>
         <article class="term-card"><h3>Occupancy is a means, not a score</h3><p>Occupancy buys latency hiding. If DRAM is already at 90% of peak, more warps change nothing — the kernel is bandwidth-bound, not latency-bound. If both SOLs are low and Long Scoreboard stalls dominate, <em>then</em> raising occupancy (or ILP per thread) is exactly the fix. Also compare theoretical vs achieved: a gap means imbalance or tail effect — fix the launch shape, not the register count.</p></article>
-        <article class="term-card"><h3>Stall reasons name the culprit</h3><p>Long Scoreboard = warps parked on global-memory dependencies → coalesce, cache, prefetch, add ILP. Short Scoreboard = shared-memory pressure/bank conflicts. Barrier = threads waiting at <code>__syncthreads()</code> → unbalanced work or oversized blocks. LG/MIO Throttle = memory-op queues full → too many small requests; vectorize. "Not Selected" is healthy — it means there were spare eligible warps. Stall data turns "memory-bound" from a shrug into a specific edit.</p></article>
+        <article class="term-card"><h3>Stall reasons form a hypothesis</h3><p>Read stalls only after confirming the schedulers often have no eligible warp to issue. Long Scoreboard suggests a dependency on global/local/texture data; Short Scoreboard often points toward shared-memory or other MIO dependencies; Barrier means warps are waiting for peers. These are starting hypotheses, not automatic fixes: follow the dependency to the <em>producer</em> source instruction, because the sampled stalled instruction is usually the consumer. Then test one controlled change and verify elapsed time.</p></article>
         <article class="term-card"><h3>Back-of-envelope beats guessing</h3><p>A kernel moves 800 MB in 10 ms → 80 GB/s. On a 900 GB/s part that's 9% of peak: latency or access-pattern problem, not bandwidth. At 700 GB/s it's near the roof: only moving fewer bytes (fusion, reuse, smaller types) can help. Same for FLOPs vs peak. Do this arithmetic before and after every change — it catches both fake wins and fake losses.</p></article>
       </div>
+
+      <figure class="study-figure" aria-labelledby="amdahl-caption">
+        <figcaption id="amdahl-caption">Amdahl's law — optimize the part that dominates wall time</figcaption>
+        <p class="sr-only">A four-times speedup of an eight millisecond kernel in a one hundred millisecond application reduces total time to ninety-four milliseconds, only 1.06 times faster. The same speedup applied to a seventy millisecond kernel reduces total time to 47.5 milliseconds, 2.11 times faster.</p>
+        <div class="amdahl-grid" aria-hidden="true">
+          <div class="amdahl-panel">
+            <strong>Low-leverage target: kernel = 8 ms</strong>
+            <div class="amdahl-row"><span>Baseline</span><div class="amdahl-track"><div class="amdahl-bar" aria-label="Baseline 100 milliseconds: 92 other, 8 target kernel"><span class="amdahl-other" style="flex:92"></span><span class="amdahl-target" style="flex:8"></span></div></div></div>
+            <div class="amdahl-row"><span>Kernel 4×</span><div class="amdahl-track"><div class="amdahl-bar" style="width:94%" aria-label="After optimization 94 milliseconds: 92 other, 2 target kernel"><span class="amdahl-other" style="flex:92"></span><span class="amdahl-target" style="flex:2"></span></div></div></div>
+            <p class="amdahl-result">100 ms → 94 ms · only <strong>1.06× overall</strong></p>
+          </div>
+          <div class="amdahl-panel">
+            <strong>High-leverage target: kernel = 70 ms</strong>
+            <div class="amdahl-row"><span>Baseline</span><div class="amdahl-track"><div class="amdahl-bar" aria-label="Baseline 100 milliseconds: 30 other, 70 target kernel"><span class="amdahl-other" style="flex:30"></span><span class="amdahl-target" style="flex:70"></span></div></div></div>
+            <div class="amdahl-row"><span>Kernel 4×</span><div class="amdahl-track"><div class="amdahl-bar" style="width:47.5%" aria-label="After optimization 47.5 milliseconds: 30 other, 17.5 target kernel"><span class="amdahl-other" style="flex:30"></span><span class="amdahl-target" style="flex:17.5"></span></div></div></div>
+            <p class="amdahl-result">100 ms → 47.5 ms · <strong>2.11× overall</strong></p>
+          </div>
+        </div>
+        <div class="figure-legend" aria-hidden="true"><span><i class="legend-swatch other"></i>other application time</span><span><i class="legend-swatch target"></i>kernel selected for optimization</span></div>
+        <p class="figure-note"><code>nsys</code> finds the high-leverage target; <code>ncu</code> explains why that kernel is slow.</p>
+      </figure>
 
       <p class="diagram-title">Bottleneck decision tree — measure, classify, fix</p>
       <svg class="gfx" viewBox="0 0 760 312" role="img" aria-label="Bottleneck decision tree">
@@ -460,7 +533,7 @@ thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
 <line x1="618" y1="188" x2="378" y2="218" class="ln" marker-end="url(#d7m)"/>
 <line x1="660" y1="188" x2="627" y2="218" class="ln" marker-end="url(#d7m)"/>
 <rect x="8" y="220" width="238" height="76" rx="6" class="box"/><text x="18" y="238" class="t12 acs">SM% high → COMPUTE-BOUND</text><text x="18" y="254" class="t11 mut">lower precision / tensor cores,</text><text x="18" y="268" class="t11 mut">better algorithm, tuned libraries</text>
-<rect x="258" y="220" width="238" height="76" rx="6" class="box"/><text x="268" y="238" class="t12 acs">Memory% high → MEMORY-BOUND</text><text x="268" y="254" class="t11 mut">which level is at peak?</text><text x="268" y="268" class="t11 mut">DRAM → fuse, tile, SoA · L2 →</text><text x="268" y="282" class="t11 mut">redundancy · L1 → banks, vectorize</text>
+<rect x="258" y="220" width="238" height="76" rx="6" class="box"/><text x="268" y="238" class="t12 acs">Memory% high → MEMORY-BOUND</text><text x="268" y="254" class="t11 mut">which path or level is at peak?</text><text x="268" y="268" class="t11 mut">DRAM → reuse, fuse · L2/L1 → locality</text><text x="268" y="282" class="t11 mut">shared memory → bank-conflict analysis</text>
 <rect x="508" y="220" width="238" height="76" rx="6" class="box"/><text x="518" y="238" class="t12 acs">both low → LATENCY-BOUND</text><text x="518" y="254" class="t11 mut">occupancy, ILP (elements/thread),</text><text x="518" y="268" class="t11 mut">fix divergence, split atomic hotspots</text>
 </svg>
 
@@ -585,6 +658,43 @@ thread i → t[i][c]  bank (33·i+c)%32 — all different, 1 cycle</pre>
         <article class="term-card"><h3>Know when you're done</h3><p>A memory-bound kernel at ~85% of DRAM peak with sectors/req ≈ 4 is finished — further tuning is noise; only an algorithmic change (move fewer bytes) can help. A compute-bound kernel near SM peak on the right pipes is likewise done. Write that down with the metrics as evidence: "done, and here's why" is a deliverable in profiler-guided work.</p></article>
       </div>
 
+      <figure class="study-figure" aria-labelledby="fusion-causal-caption">
+        <figcaption id="fusion-causal-caption">Fusion causal graph — removing traffic can still make the kernel slower</figcaption>
+        <p class="sr-only">Fusion removes an intermediate launch and global-memory round trip, but can expand live ranges. More live values increase registers per thread, which can lower residency or spill to local memory. Extra local traffic and exposed dependency latency can outweigh the saved traffic. Compile and profile before deciding between full fusion, partial fusion, or separate kernels.</p>
+        <div class="flow-level">
+          <span class="flow-level-label">Benefit path</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step accent"><strong>Fuse producer + consumer</strong><span>keep intermediate values close</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step accent"><strong>Remove launch + DRAM round trip</strong><span>less submission and global traffic</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step accent"><strong>Possible end-to-end win</strong><span>only if added kernel cost stays smaller</span></div>
+          </div>
+        </div>
+        <div class="flow-level">
+          <span class="flow-level-label">Regression path</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step warn"><strong>Live ranges expand</strong><span>more values coexist</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step warn"><strong>Registers / thread rise</strong><span>residency may fall</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step warn"><strong>Budget exceeded?</strong><span>spills become local-memory traffic</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step warn"><strong>Latency + traffic dominate</strong><span>runtime regresses despite saved DRAM</span></div>
+          </div>
+        </div>
+        <div class="flow-level">
+          <span class="flow-level-label">Decision</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step"><strong>Check compile report + SASS</strong><span>register count, local loads/stores, live ranges</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step"><strong>Measure identical workload</strong><span>end-to-end time, not occupancy alone</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step accent"><strong>Keep, partially fuse, or split</strong><span>choose the fastest correct boundary</span></div>
+          </div>
+        </div>
+      </figure>
+
       <p class="diagram-title">Tiled matrix multiply — one block's loop</p>
       <pre class="diagram">__shared__ float As[T][T], Bs[T][T+1];            // +1: avoid bank conflicts
 float acc = 0;
@@ -637,6 +747,27 @@ block sum: warp sums → shared[32] → first warp reduces them the same way</pr
 <text x="708" y="200" class="t11 mut">t</text>
 </svg>
 
+      <figure class="study-figure" aria-labelledby="pipeline-state-caption">
+        <figcaption id="pipeline-state-caption"><code>cuda::pipeline</code> — one stage's reusable state cycle</figcaption>
+        <p class="sr-only">The producer acquires a free stage, issues an asynchronous copy, and commits the stage. The consumer waits for that committed stage, computes only after the copy is complete, releases the stage, and the producer can then reacquire it for a later tile.</p>
+        <div class="flow-row" aria-hidden="true">
+          <div class="flow-step accent"><strong><code>producer_acquire</code></strong><span>claim a free stage</span></div>
+          <span class="flow-arrow"></span>
+          <div class="flow-step"><strong>async copy</strong><span>fill this stage's shared tile</span></div>
+          <span class="flow-arrow"></span>
+          <div class="flow-step"><strong><code>producer_commit</code></strong><span>publish the issued batch</span></div>
+          <span class="flow-arrow"></span>
+          <div class="flow-step warn"><strong><code>consumer_wait</code></strong><span>wait for the oldest stage</span></div>
+          <span class="flow-arrow"></span>
+          <div class="flow-step"><strong>compute</strong><span>read the completed tile</span></div>
+          <span class="flow-arrow"></span>
+          <div class="flow-step"><strong><code>consumer_release</code></strong><span>tile is no longer in use</span></div>
+          <span class="flow-arrow"><small>next tile</small></span>
+          <div class="flow-step accent"><strong>reacquire</strong><span>stage becomes writable again</span></div>
+        </div>
+        <p class="figure-note">The correctness invariant is ownership: the producer cannot overwrite a stage until the consumer releases it, and the consumer cannot read it until its asynchronous copy completes.</p>
+      </figure>
+
       <p class="diagram-title">Timeline — copy/compute overlap with two streams</p>
       <svg class="gfx" viewBox="0 0 760 268" role="img" aria-label="Copy/compute overlap with two streams">
 <defs><marker id="dbm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
@@ -657,11 +788,43 @@ block sum: warp sums → shared[32] → first warp reduces them the same way</pr
 <text x="708" y="260" class="t11 mut">t</text>
 </svg>
 
+      <figure class="study-figure" aria-labelledby="graph-lifecycle-caption">
+        <figcaption id="graph-lifecycle-caption">CUDA Graph lifecycle — pay setup once, then update or rebuild deliberately</figcaption>
+        <p class="sr-only">Build a graph explicitly or with stream capture, instantiate it into an executable graph, and launch that executable repeatedly. When the workflow changes, compatible parameter or topology updates reuse the executable; incompatible structural changes require re-instantiation before launching again.</p>
+        <div class="flow-level">
+          <span class="flow-level-label">Normal reusable path</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step"><strong>Build / capture</strong><span>nodes plus dependency edges</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step warn"><strong>Instantiate</strong><span>validate and create executable</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step accent"><strong>Launch / reuse</strong><span>enqueue the same executable repeatedly</span></div>
+            <span class="flow-arrow"><small>workflow changes?</small></span>
+            <div class="flow-step"><strong>Update decision</strong><span>parameters only, or structural change?</span></div>
+          </div>
+        </div>
+        <div class="flow-level">
+          <span class="flow-level-label">Decision outcome</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step accent"><strong>Compatible change</strong><span>update node parameters or compatible graph</span></div>
+            <span class="flow-arrow"><small>success</small></span>
+            <div class="flow-step accent"><strong>Reuse executable</strong><span>next launch sees the update</span></div>
+            <span class="flow-arrow"><small>otherwise</small></span>
+            <div class="flow-step warn"><strong>Structural change</strong><span>topology or node type is incompatible</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step warn"><strong>Reinstantiate</strong><span>create a new executable, then launch</span></div>
+          </div>
+        </div>
+        <p class="figure-note">Graphs primarily reduce repeated host submission overhead and expose dependencies; they do not make an individually slow kernel intrinsically faster.</p>
+      </figure>
+
       <div class="link-list">
         <a href="https://developer.nvidia.com/blog/cuda-pro-tip-write-flexible-kernels-grid-stride-loops/" target="_blank" rel="noopener">Grid-stride loops</a>
         <a href="https://developer.nvidia.com/blog/using-cuda-warp-level-primitives/" target="_blank" rel="noopener">Warp-level primitives</a>
         <a href="https://github.com/NVIDIA/cccl" target="_blank" rel="noopener">CCCL: Thrust, CUB, libcu++</a>
         <a href="https://github.com/NVIDIA/cutlass" target="_blank" rel="noopener">CUTLASS</a>
+        <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/pipelines.html" target="_blank" rel="noopener">CUDA pipeline state model</a>
+        <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html" target="_blank" rel="noopener">CUDA Graph lifecycle and updates</a>
         <a href="https://docs.nvidia.com/cuda/inline-ptx-assembly/" target="_blank" rel="noopener">Inline PTX assembly</a>
         <a href="https://siboehm.com/articles/22/CUDA-MMM" target="_blank" rel="noopener">Optimizing SGEMM step by step (worked example)</a>
       </div>
@@ -771,7 +934,7 @@ every API result is checked, async errors are surfaced deliberately</pre>
         <div><dt>Wave intrinsics (SM6+)</dt><dd>HLSL's warp-level ops: <code>WaveActiveSum</code>, <code>WaveReadLaneAt</code>, <code>WaveGetLaneIndex</code> — shuffles/ballots by another name. Vulkan/GLSL calls them subgroup operations.</dd></div>
         <div><dt>Slang</dt><dd>Modular shading language (modules, generics, interfaces) that compiles to HLSL/DXIL, SPIR-V, Metal, and CUDA — one kernel source targeting many APIs.</dd></div>
         <div><dt>Thread block clusters</dt><dd>Hopper+: groups of blocks co-scheduled on one GPC that can access each other's shared memory (distributed shared memory) and sync — a new tier between block and grid.</dd></div>
-        <div><dt>TMA (Tensor Memory Accelerator)</dt><dd>Hopper/Blackwell hardware engine for bulk asynchronous global↔shared tile copies — no threads or registers spent on address math; pairs with <code>cuda::barrier</code>/pipelines.</dd></div>
+        <div><dt>TMA (Tensor Memory Accelerator)</dt><dd>Hopper/Blackwell hardware engine for bulk asynchronous global↔shared tile copies. One elected thread normally initiates a transfer; hardware offloads the multidimensional address generation and data movement, while a <code>cuda::barrier</code> or pipeline tells consumers when the tile is ready.</dd></div>
         <div><dt>Blackwell (SM100/SM120)</dt><dd>Current NVIDIA generation (B200/GB200, RTX 50). Fifth-gen tensor cores add FP4/FP6 with microscaling formats; bigger L2; NVLink 5; data-center parts add dedicated tensor memory for MMA accumulators (<code>tcgen05</code> PTX).</dd></div>
         <div><dt>Compute capability</dt><dd>NVIDIA's architecture version (Ampere 8.x, Ada 8.9, Hopper 9.0, Blackwell 10.x/12.x). Compile fat binaries with PTX fallback so kernels run — then re-tune — on newer parts.</dd></div>
         <div><dt>Fat binary &amp; PTX JIT</dt><dd><code>nvcc -gencode</code> embeds SASS for chosen architectures plus PTX; on a newer GPU the driver JIT-compiles the PTX. Code runs forward, but re-tune it — JIT'd PTX won't exploit new hardware features by magic.</dd></div>
@@ -784,7 +947,7 @@ every API result is checked, async errors are surfaced deliberately</pre>
       <div class="term-grid">
         <article class="term-card"><h3>One mental model, many spellings</h3><p>SIMT lanes grouped in warps, blocks with scratchpad and a barrier, a grid of independent blocks: CUDA, HIP, HLSL, GLSL, and Slang all expose exactly this. Learn the mapping table once and a tiled reduction ports across all five with renames. The genuinely portable skills are the invariants: coalescing, bank conflicts, occupancy, divergence — every vendor's profiler measures the same physics.</p></article>
         <article class="term-card"><h3>The width trap</h3><p>The classic porting bug: warp-level code assuming 32 lanes (shuffle reductions, ballot masks, <code>tile[32]</code> arrays) silently breaks on CDNA's 64-wide wavefronts — half the data goes missing. Write <code>warpSize</code>-parameterized code, or template the width. Same trap in shaders: wave size varies by vendor (32/64) and Vulkan lets you query — never assume.</p></article>
-        <article class="term-card"><h3>Blackwell in one paragraph</h3><p>For an optimizer, Blackwell means: tensor cores now reach FP8 and FP4 (with per-block scaling factors — "microscaling") for inference throughput; TMA + clusters from Hopper remain the way to feed them; L2 keeps growing (tile accordingly); and on data-center parts, MMA accumulators move to dedicated tensor memory instead of registers. Practical takeaway: peak numbers assume tensor-core paths — a scalar-FP32 kernel leaves ~10× on the table on these parts.</p></article>
+        <article class="term-card"><h3>Blackwell in one paragraph</h3><p>For an optimizer, Blackwell means: tensor cores support narrow and block-scaled formats such as FP8 and FP4 for inference throughput; TMA + clusters from Hopper remain important data-feeding tools; cache and shared-memory capacities must be queried per device; and SM100 data-center parts expose dedicated tensor memory for MMA accumulators. Practical takeaway: peak numbers depend on the device, datatype, instruction path, and workload—measure a relevant library or tensor-core baseline instead of applying a fixed scalar-FP32 ratio.</p></article>
         <article class="term-card"><h3>Optimizing without owning the algorithm</h3><p>The job description says it directly: improve kernels "without extensive background in the underlying algorithms." The method: treat the kernel as a memory-and-instruction stream — the profiler tells you traffic shapes, stall reasons, and pipe utilization without any domain knowledge. Preserve semantics with golden-output tests before touching anything; then every classified bottleneck has a fix that is algorithm-agnostic (layout, tiling, fusion, precision, launch shape).</p></article>
       </div>
 
@@ -919,6 +1082,29 @@ every API result is checked, async errors are surfaced deliberately</pre>
 const quizData = {
   arch: [
     {
+      q: "A warp writes producer values into shared memory and then every lane executes `__shfl_sync`. What must your reasoning say?",
+      options: [
+        ["The shuffle synchronizes its named register exchange, but it is not a shared-memory fence; use the appropriate `__syncwarp(mask)` before memory consumers", true],
+        ["The shuffle automatically publishes all earlier shared-memory writes to its mask", false],
+        ["A block-wide `__syncthreads()` is always required even when only one warp participates", false],
+        ["Declaring the shared array `volatile` supplies the missing rendezvous and ordering", false]
+      ],
+      explain: "Separate register exchange from memory communication. A `_sync` shuffle converges the lanes named by its mask for that intrinsic, but NVIDIA explicitly states that warp shuffle intrinsics do not provide memory ordering. Register-only reductions need no shared-memory barrier; warp-scoped producer/consumer traffic through memory needs a valid `__syncwarp(mask)` (or a wider primitive when the scope is larger).",
+      sources: [{ label: "CUDA Programming Guide — warp shuffle and synchronization", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html" }]
+    },
+    {
+      type: "order",
+      q: "Arrange the dependency-first method for choosing a CUDA synchronization primitive.",
+      steps: [
+        "Name the producer, consumer, memory location, and overwrite that must be ordered",
+        "Determine the full participant scope: lane, warp, block, cluster, grid, stream, or host",
+        "Choose the narrowest primitive that supplies the required participation and memory ordering",
+        "Verify uniform participation/masks and test the edge with the CPU oracle plus sanitizer"
+      ],
+      explain: "Start from the happens-before edge, not from a favorite barrier. Scope determines the primitive: a register stays within one lane, shuffles exchange registers within a named warp group, memory exchange needs matching ordering, block barriers require block-uniform participation, and cross-kernel/stream dependencies use launches, events, or explicit synchronization. A memory fence only orders the calling thread's memory operations; it is not a rendezvous by itself.",
+      sources: [{ label: "CUDA Programming Guide — synchronization scopes", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html" }]
+    },
+    {
       type: "blank",
       q: "Complete the launch so every element of an n-element array gets a thread, for any n.",
       pre: "int block = 256;\nint grid = ______;\nsaxpy<<<grid, block>>>(n, a, d_x, d_y);   // kernel guards with if (i < n)",
@@ -944,15 +1130,18 @@ const quizData = {
       explain: "Theoretical occupancy is a static calculation of how many warps fit on an SM, from four budgets: registers/thread, shared memory/block, block slots, and warp-slot granularity (e.g. 768-thread blocks on a 2048-thread SM fit only twice — 512 threads of capacity are stranded). L2 size and DRAM bandwidth affect how fast resident warps run, not how many fit. And launching too few blocks lowers ACHIEVED occupancy, never theoretical."
     },
     {
-      type: "order",
-      q: "Arrange the chain of events that takes a kernel from host code to instructions executing on the GPU.",
-      steps: [
-        "Host calls kernel<<<grid, block>>> — the launch is queued on a stream and the CPU continues asynchronously",
-        "The GPU's work distributor assigns blocks to SMs that have free registers, shared memory, and block slots",
-        "Each SM carves its resident blocks into 32-thread warps with allocated registers",
-        "Warp schedulers pick an eligible warp each cycle and issue its next instruction"
+      q: "This warp reduction passes tests until `n` is not a multiple of 32. What is the safest correction?",
+      pre: "int i = blockIdx.x * blockDim.x + threadIdx.x;\nif (i >= n) return;\nfloat v = x[i];\nfor (int off = 16; off > 0; off >>= 1)\n  v += __shfl_down_sync(0xffffffff, v, off);",
+      options: [
+        ["Keep every lane in the warp participating: load `v = (i < n) ? x[i] : 0`, remove the early return, and retain the full mask (or use a rigorously computed participation mask with guarded source lanes)", true],
+        ["Replace 0xffffffff with __activemask() inside each loop iteration after the early return", false],
+        ["Add __syncthreads() before the shuffle loop", false],
+        ["Round n down to the previous multiple of 32", false]
       ],
-      explain: "Launch (async, queued on a stream) → block distribution (a block runs entirely on one SM) → warp formation (whole warps, which is why block sizes should be multiples of 32) → per-warp issue (why divergence and coalescing are warp-granular). Knowing which stage owns which decision tells you where each fix applies: launch shape at step 1–2, resource budgets at step 3, stalls at step 4."
+      explain: "The full mask names lanes that exited, violating the _sync intrinsic's participation contract. The simplest reduction fix is to keep the partial warp converged and give out-of-range lanes the additive identity, so all 32 named lanes execute every shuffle. Capturing __activemask() opportunistically inside divergent code does not reconstruct the intended group, a block barrier does not repair an invalid warp mask, and rounding n silently drops data.",
+      sources: [
+        { label: "CUDA warp vote and shuffle intrinsics", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html#warp-vote-functions" }
+      ]
     },
     {
       q: "What is a warp on NVIDIA hardware?",
@@ -1043,6 +1232,33 @@ const quizData = {
         ["A volatile qualifier on the exchanged variable", false]
       ],
       explain: "Volta gave each thread its own program counter, so lanes of a warp are no longer guaranteed to move in lockstep through divergent code. The _sync intrinsics take a mask naming which lanes participate and reconverge them before the exchange. The legacy unmasked forms are deprecated and can silently read stale values under divergence."
+    },
+    {
+      q: "Block 0 writes a payload, then sets a global `ready` flag. Block 1 spins on `ready` before reading the payload. Why is `volatile int ready` still not a correct publication protocol?",
+      pre: "// producer (block 0)                 // consumer (block 1)\npayload[0] = 42;                        while (!ready) { }\nready = 1;                              printf(\"%d\", payload[0]);",
+      options: [
+        ["Volatile affects compiler loads/stores but supplies neither atomicity nor a happens-before edge; publish with a device-scope release store and consume with a matching acquire load", true],
+        ["The payload must be placed in shared memory so both blocks can see it", false],
+        ["Add __syncthreads() after each access; it synchronizes all blocks", false],
+        ["It is correct on Volta and newer because independent thread scheduling orders global memory", false]
+      ],
+      explain: "Cross-block message passing needs both the right scope and ordering. A device-scope atomic release on `ready` makes prior payload stores visible to a matching device-scope acquire load. `volatile` is not a synchronization primitive, `__syncthreads()` is block-local, and scheduler generation does not create a memory-order guarantee. There is a second design hazard: a consumer that spins can deadlock an ordinary grid if it prevents the producer block from being scheduled, so prefer separate kernels or a valid cooperative launch when possible.",
+      sources: [
+        { label: "CUDA C++ memory model — message passing", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cuda-cpp-memory-model.html#example-message-passing" }
+      ]
+    },
+    {
+      q: "A single kernel needs `grid.sync()` between two phases. Which launch decision is required for correctness?",
+      options: [
+        ["Use a cooperative launch and limit the grid so all participating blocks can be resident together; otherwise split the phases into two stream-ordered kernels", true],
+        ["Launch normally and add __threadfence() before grid.sync()", false],
+        ["Use the largest possible grid so every SM always has queued work", false],
+        ["Put grid.sync() in block 0 only to avoid waiting", false]
+      ],
+      explain: "A grid-wide barrier can only make progress when the launch contract guarantees all blocks in the cooperative grid can participate. That requires cooperative-launch support and a grid sized from occupancy/co-residency limits. If the desired grid is larger, the robust phase boundary is kernel completion: launch phase 2 after phase 1 in the same stream. A fence orders memory but is not a grid barrier, and collectives must be reached by every member.",
+      sources: [
+        { label: "CUDA Cooperative Groups", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cooperative-groups.html" }
+      ]
     }
   ],
   mem: [
@@ -1068,7 +1284,7 @@ const quizData = {
         ["8", false],
         ["256", false]
       ],
-      explain: "Vector accesses require natural alignment — sizeof(float4) = 16 bytes; a misaligned reinterpret is undefined behavior and faults on the GPU. cudaMalloc returns ≥256-byte-aligned pointers, so fresh buffers are always safe; the danger is offset arithmetic afterwards — ptr + 3 floats is 12 bytes off and kills the cast. 4 and 8 are the alignments of float and float2; 256 is sufficient but not what the type requires."
+      explain: "Vector accesses require natural alignment — sizeof(float4) = 16 bytes; using a misaligned float4 access violates the alignment contract and can produce incorrect behavior (Compute Sanitizer can diagnose misaligned accesses). cudaMalloc strongly aligns the base allocation, but offset arithmetic can break that guarantee — ptr + 3 floats is 12 bytes off and invalidates the cast. 4 and 8 are the alignments of float and float2; 256 is sufficient but not what the type requires."
     },
     {
       type: "multi",
@@ -1135,14 +1351,18 @@ const quizData = {
       explain: "Bank = (address / 4) % 32. Different words in the same bank must be served one per cycle — an N-way conflict costs N cycles. Same address is fine: that's a broadcast, served in one cycle. Non-consecutive is also fine as long as the words land in distinct banks — e.g. a stride-33 walk hits every bank exactly once, which is exactly why tiles get padded to [T][T+1]."
     },
     {
-      q: "A 32×32 shared-memory float tile is read column-wise (thread i reads tile[i][c]). What happens and what is the standard fix?",
+      q: "A 2-D image allocated with `cudaMallocPitch` is correct only when its width happens to equal the returned row stride. What did the kernel get wrong?",
+      pre: "float* d; size_t pitch;\ncudaMallocPitch(&d, &pitch, width * sizeof(float), height);\n// BUG in kernel:\nfloat* row = d + y * width;\nout = row[x];",
       options: [
-        ["All 32 threads hit the same bank (row stride 32 = bank-neutral), a 32-way conflict — declare the tile [32][33] to stagger the banks", true],
-        ["The reads fall out of cache — use __ldg() on the tile", false],
-        ["Nothing — shared memory has no penalty for column access", false],
-        ["The tile must be transposed in global memory first", false]
+        ["`pitch` is a byte stride that may include padding; pass it to the kernel and form each row as `(float*)((char*)d + y * pitch)`, using cudaMemcpy2D for matching 2-D copies", true],
+        ["pitch must be divided by blockDim.x before indexing", false],
+        ["cudaMallocPitch returns the number of float elements, so multiply it by sizeof(float)", false],
+        ["The allocation is column-major and x/y must be swapped", false]
       ],
-      explain: "Column elements are 32 floats apart, and 32 × 4 bytes is exactly one full trip around the 32 banks — every element of the column lives in the same bank, so the warp serializes 32 ways. Padding the row to 33 floats makes the column walk advance one bank per row: all 32 accesses hit different banks, one cycle. One wasted float per row buys a 32× speedup on that access."
+      explain: "Pitched allocation deliberately pads rows for alignment, so logical width and physical byte stride are different quantities. The returned pitch is in bytes and must travel with the pointer through every kernel and copy. Indexing with width works accidentally only when no padding was added; treating pitch as an element count multiplies it twice, and allocation does not change the matrix's logical row-major layout.",
+      sources: [
+        { label: "CUDA Runtime memory management — cudaMallocPitch", url: "https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__MEMORY.html" }
+      ]
     },
     {
       q: "What is the difference in scope between L1 and L2 cache on a GPU?",
@@ -1197,26 +1417,78 @@ const quizData = {
     {
       q: "Why does overlapping cudaMemcpyAsync with kernel execution require pinned (page-locked) host memory?",
       options: [
-        ["The DMA engine needs pages that can't move; from pageable memory the driver must first copy through a staging buffer, which serializes and slows the transfer", true],
+        ["The DMA engine needs stable pages; pageable memory requires staging and may synchronize, so reliable copy/compute overlap is not guaranteed", true],
         ["Pinned memory lives on the GPU, skipping PCIe entirely", false],
         ["Pageable memory is read-only to the GPU driver", false],
         ["It doesn't — async copies overlap from any allocation", false]
       ],
-      explain: "The GPU's copy engine DMAs directly from physical pages, so they must be locked in place. With pageable memory the runtime stages through an internal pinned buffer — the 'async' call quietly becomes synchronous-ish and slower. cudaMallocHost/cudaHostAlloc + cudaMemcpyAsync on a non-default stream is the pattern that genuinely overlaps transfer with compute."
+      explain: "The GPU's copy engine DMAs directly from physical pages, so they must be locked in place. With pageable memory the runtime may synchronize and stage through an internal pinned buffer, so reliable copy/compute overlap is not guaranteed. cudaMallocHost/cudaHostAlloc + cudaMemcpyAsync on a non-default stream is the standard overlap pattern; confirm the device's copy-engine capabilities rather than assuming a particular engine count."
+    },
+    {
+      q: "A `cudaMallocManaged` dataset is 6× slower on its first GPU pass, then reaches expected bandwidth on later passes. nsys shows GPU page-fault groups during the first pass. What should you test first?",
+      options: [
+        ["Prefetch the working set to the target GPU on a stream before the timed kernel, and keep ownership/access patterns stable enough to avoid ping-pong migration", true],
+        ["Raise occupancy; page faults indicate too few resident warps", false],
+        ["Use volatile loads so pages remain resident", false],
+        ["Disable L2 caching because migrated pages bypass it", false]
+      ],
+      explain: "The changing first-pass cost is data migration, not steady-state kernel throughput. `cudaMemPrefetchAsync` can move the allocation before it is needed and overlap that migration with other work; `cudaMemAdvise` can add placement/access hints. Warm-up may hide the symptom in a benchmark, but production code should decide who owns the pages and avoid repeated CPU↔GPU or GPU↔GPU migration.",
+      sources: [
+        { label: "Unified memory prefetch and advice", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/understanding-memory.html#memory-advise-and-prefetch" }
+      ]
+    },
+    {
+      q: "A fast path casts `base + offset` to `float4*`, but only fails for sliced tensors and tail sizes. What is the production-safe design?",
+      pre: "const float* view = base + offset;\nfloat4 v = reinterpret_cast<const float4*>(view)[i];",
+      options: [
+        ["Check 16-byte alignment and vectorizable length at runtime; use the float4 loop only for the aligned body and handle the prefix/tail with scalar loads", true],
+        ["Assume cudaMalloc alignment makes every offset aligned", false],
+        ["Add __align__(16) to the local pointer variable", false],
+        ["Round offset down to a multiple of four and ignore the extra values", false]
+      ],
+      explain: "cudaMalloc aligns the base allocation, not arbitrary subviews. A float offset of 1, 2, or 3 breaks float4's 16-byte natural alignment, and a vector loop also needs a scalar tail when the element count is not divisible by four. A real kernel therefore dispatches or peels: scalar until aligned, vectorized body, scalar tail. Type annotations cannot repair an address, and rounding changes which elements are read.",
+      sources: [
+        { label: "CUDA built-in vector types and alignment", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html#built-in-vector-types" }
+      ]
     }
   ],
   prof: [
     {
-      type: "blank",
-      q: "Complete the compile command that reports registers, shared memory, and spills per kernel.",
-      pre: "nvcc -O3 ______ kernel.cu",
+      q: "Nsight Compute shows that schedulers issue an instruction on nearly every cycle, while Long Scoreboard is the largest sampled stall category. What is the strongest next conclusion?",
       options: [
-        ["-Xptxas -v", true],
-        ["-lineinfo", false],
-        ["--use_fast_math", false],
-        ["-G", false]
+        ["Do not optimize the stall label in isolation: issue efficiency says schedulers are staying busy, so first establish the actual throughput ceiling and trace any limiting dependency to its producer", true],
+        ["Long Scoreboard is largest, so raising occupancy must improve runtime", false],
+        ["The consumer source line carrying the stall sample is automatically the root cause", false],
+        ["Replace every global load with shared memory before taking another measurement", false]
       ],
-      explain: "-Xptxas -v makes the assembler print per-kernel resource usage — registers/thread, shared memory, and spill loads/stores — the zero-cost first check before and after any register-pressure change. -lineinfo adds source↔SASS correlation for profilers (useful, different job); --use_fast_math trades accuracy for speed; -G disables device optimization for debugging — never benchmark with it, it can be 10× slower."
+      explain: "Stall reasons are useful when schedulers fail to issue because no eligible warp exists. If issue slots are already filled, the sampled stall distribution can coexist with healthy latency hiding. Establish the SOL/roofline ceiling and follow the dependency chain: a stalled consumer often points back to the producer load or instruction that created the wait. Then make one falsifiable change and compare elapsed time.",
+      sources: [{ label: "Nsight Compute Profiling Guide — scheduler and warp statistics", url: "https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html" }]
+    },
+    {
+      type: "multi",
+      q: "Match Compute Sanitizer tools to the evidence they are designed to provide.",
+      options: [
+        ["Run memcheck first for out-of-bounds or misaligned memory accesses", true],
+        ["Use racecheck for shared-memory read/write hazards", true],
+        ["Use initcheck for uninitialized global-memory reads", true],
+        ["Use synccheck for invalid barrier or warp-mask participation", true],
+        ["A clean racecheck run also proves that all global addresses were in bounds", false]
+      ],
+      explain: "The tools answer different questions. Memcheck precisely attributes invalid/misaligned accesses and should run first. Racecheck focuses on shared-memory hazards (including supported asynchronous-copy ordering), initcheck finds uninitialized device global-memory use, and synccheck diagnoses invalid synchronization. No sanitizer proves that the algorithm implements the intended math, so the CPU reference remains mandatory.",
+      sources: [{ label: "NVIDIA Compute Sanitizer tool guide", url: "https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html" }]
+    },
+    {
+      q: "The application takes 80 ms normally but 2.6 s under `ncu --set full`; the report shows 14 replay passes. Did the kernel regress?",
+      options: [
+        ["No conclusion about production wall time follows—the profiler replays work and may save/restore memory to collect incompatible counters; use native/nsys timing and narrow ncu to the needed kernels and sections", true],
+        ["Yes—the full metric set reveals the kernel's true execution time", false],
+        ["Yes—14 passes mean the kernel executed 14 times in production too", false],
+        ["No, because profiler overhead is always exactly zero for GPU kernels", false]
+      ],
+      explain: "Hardware counters cannot all be collected simultaneously. Kernel replay groups metrics into passes and restores written memory so each pass sees equivalent inputs; software-patched metrics and profiler setup add more overhead. The duration inside the report can still be useful, but host timers around a profiled run include tool work. Time the real application separately and request only the sections and instances needed for the current hypothesis.",
+      sources: [
+        { label: "Nsight Compute replay and overhead", url: "https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#replay" }
+      ]
     },
     {
       type: "blank",
@@ -1255,15 +1527,17 @@ const quizData = {
       explain: "Baseline and golden outputs come first because every later step needs a reference for 'faster' and 'still correct' — especially when you don't own the algorithm. The timeline prevents optimizing an irrelevant kernel (Amdahl); SOL classification prevents applying the wrong family of fix; one change at a time keeps causality clear; and re-profiling is mandatory because removing one bottleneck promotes the next."
     },
     {
-      type: "order",
-      q: "NVIDIA's Best Practices Guide structures performance work as the APOD cycle. Arrange its stages.",
-      steps: [
-        "Assess — profile the existing code and locate the hotspots that actually bound performance",
-        "Parallelize — expose the hotspot as parallel work, preferring libraries before custom kernels",
-        "Optimize — tune the parallel version guided by profiler metrics",
-        "Deploy — ship the improvement, then start the next cycle on the new bottleneck"
+      q: "A lookup kernel reuses the same table on every request. Production shows a warm 82% L2 hit rate, but a default ncu replay reports 9%. How should you investigate?",
+      options: [
+        ["Treat cold and warm cache as different workloads: keep the controlled cold profile, then collect a representative warm-cache run with appropriate cache-control/replay settings and confirm end-to-end behavior in nsys", true],
+        ["Trust only the 9% value because profiler cache state is always identical to production", false],
+        ["Force the table into shared memory before checking whether the profile is representative", false],
+        ["Average 82% and 9% to estimate the real cache hit rate", false]
       ],
-      explain: "APOD is deliberately a cycle, not a checklist: Assess with real profiles (not intuition), Parallelize with the cheapest thing that works (cuBLAS/cuFFT/Thrust before hand-written kernels), Optimize only what the profiler indicts, Deploy so wins land early — then loop, because the bottleneck has moved. Interviewers like it because it encodes the discipline of measuring before and after every change."
+      explain: "Nsight Compute can flush caches between replay passes to make counter collection reproducible, which intentionally models a cold state and may differ from a service's steady-state reuse. The right answer is not to choose the friendlier number: measure cold-start and warm steady state separately, use cache-control none only when the replay plan makes that meaningful, and let the production timeline decide which state dominates user-visible latency.",
+      sources: [
+        { label: "Nsight Compute cache control and replay", url: "https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#overhead" }
+      ]
     },
     {
       type: "multi",
@@ -1390,12 +1664,12 @@ const quizData = {
     {
       q: "A kernel reads 1.2 GB and writes 0.4 GB in 4.0 ms on a GPU with 1.6 TB/s peak DRAM bandwidth. What do you conclude?",
       options: [
-        ["Effective bandwidth is 400 GB/s — about 25% of peak, so there's likely 3–4× available from access patterns or latency fixes", true],
+        ["Effective bandwidth is 400 GB/s—25% of peak; that establishes headroom only after other evidence shows the kernel should be bandwidth-bound, so inspect SOL, sectors/request, stalls, and useful work next", true],
         ["The kernel exceeds peak bandwidth, so the timing is wrong", false],
         ["Effective bandwidth is 1.6 TB/s — the kernel is optimal", false],
         ["Nothing — bandwidth cannot be computed without the FLOP count", false]
       ],
-      explain: "(1.2 + 0.4) GB / 0.004 s = 400 GB/s = 25% of the 1.6 TB/s roof. A supposedly memory-bound kernel far from the roof means wasted sectors (check sectors/request), latency limits (check occupancy/ILP and stalls), or serialization. If the same kernel measured ~1.4 TB/s, it would be near the roof and only algorithmic traffic reduction would remain. This two-line calculation frames every memory optimization conversation."
+      explain: "(1.2 + 0.4) GB / 0.004 s = 400 GB/s = 25% of the 1.6 TB/s roof. The calculation is useful, but it does not prove the kernel is memory-bound or promise a 4× speedup: compute work, dependencies, launch shape, or deliberately low traffic may set the wall. If SOL and roofline evidence say bandwidth should dominate, check sectors/request, occupancy/ILP, and stalls to explain the gap. This two-line calculation frames the investigation; the profiler establishes the diagnosis."
     },
     {
       q: "On a roofline plot a kernel sits well left of the ridge point, on the sloped bandwidth line. What is the only class of change that can raise its FLOP/s?",
@@ -1416,9 +1690,62 @@ const quizData = {
         ["ncu only works on kernels shorter than one millisecond", false]
       ],
       explain: "A kernel that is 8% of the timeline caps its best-case win at 8%; meanwhile the real problem may be H2D copies or gaps where the GPU waits on CPU work — invisible in a per-kernel profile. The workflow is: nsys for where time goes → ncu on the dominant kernel for why → fix → re-run nsys, because the bottleneck moves after each fix."
+    },
+    {
+      q: "ncu shows both SM and memory SOL below 10%, but the launch has only 2 blocks on a 120-SM GPU and each block runs for 4 ms. What is the first diagnosis?",
+      options: [
+        ["Severe grid undersubscription: at most two SMs can work while 118 sit idle; split or decompose the work into more independent blocks before tuning instruction stalls", true],
+        ["Generic memory latency: increase the L2 hit rate", false],
+        ["Compute saturation: move the kernel to tensor cores", false],
+        ["The profiler is invalid because SOL percentages cannot both be low", false]
+      ],
+      explain: "Low SOL alone often suggests latency, but launch geometry supplies the decisive evidence here. Two long blocks can occupy at most two SMs, so whole-device averages must be low even if those two SMs are busy. Check the Launch Statistics section and active cycles per SM, then create enough independently schedulable work—unless the algorithm truly has only two tasks, in which case optimize within each task and document the parallelism limit.",
+      sources: [
+        { label: "Nsight Compute Profiling Guide", url: "https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html" }
+      ]
+    },
+    {
+      type: "multi",
+      q: "An optimization cuts runtime from 1.0 ms to 0.45 ms, but ncu also shows requested global-load bytes fell by 55%. Which review conclusions are supported?",
+      options: [
+        ["Verify output coverage and edge cases—the speedup may come from intentionally eliminated traffic or from accidentally skipped work", true],
+        ["Compare executed work and byte counters, not just bandwidth percentage, because a faster kernel can report lower utilization after moving less data", true],
+        ["Re-run end-to-end profiling; the former hot kernel may no longer dominate", true],
+        ["The change is automatically valid because kernel time improved", false],
+        ["Restore the removed loads so the bandwidth percentage stays high", false]
+      ],
+      explain: "A counter that changes by the same order as the speedup is evidence to investigate, not proof of either a win or a bug. A valid fusion, cache reuse, or dead-load removal should reduce requested work while preserving results; a bad bounds calculation can produce the same profile. Validate a golden output across representative and awkward shapes, account for executed instructions/bytes, then re-run nsys because optimization changes the system bottleneck.",
+      sources: [
+        { label: "CUDA Best Practices — verification and profiling", url: "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" }
+      ]
     }
   ],
   opt: [
+    {
+      type: "order",
+      q: "Arrange one reusable stage of a `cuda::pipeline` producer/consumer cycle.",
+      steps: [
+        "Producer acquires a free stage",
+        "Producer issues the asynchronous copy into that stage",
+        "Producer commits the issued batch",
+        "Consumer waits until the committed stage is ready",
+        "Consumer computes from the completed shared-memory tile",
+        "Consumer releases the stage so the producer may reacquire it"
+      ],
+      explain: "The state machine is an ownership contract. A producer cannot overwrite a stage still owned by a consumer, and a consumer cannot read before the async transaction completes. More stages can cover more latency, but every stage consumes shared memory and makes the ownership protocol more complex.",
+      sources: [{ label: "CUDA Programming Guide — pipelines", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/pipelines.html" }]
+    },
+    {
+      q: "An instantiated CUDA Graph is launched repeatedly. Scalar kernel parameters change, and later the workflow gains a new node. What is the correct lifecycle decision?",
+      options: [
+        ["Use a compatible node/graph update for parameter changes; if the structural update is incompatible, re-instantiate a new executable graph before launching", true],
+        ["Recapture and instantiate on every iteration because graph executables cannot be updated", false],
+        ["Keep the old executable after an incompatible topology change; CUDA discovers the new node automatically", false],
+        ["Expect graph reuse to make the individual kernel execute faster even when launch overhead was negligible", false]
+      ],
+      explain: "Graphs separate definition, instantiation, and execution. Reuse pays when a stable dependency DAG launches repeatedly. Compatible parameter or topology updates can update the executable; an incompatible structural change requires re-instantiation. The gain is lower repeated host submission/setup and more visible dependencies—not a magical reduction in the kernel's own execution time.",
+      sources: [{ label: "CUDA Programming Guide — CUDA Graph updates", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html" }]
+    },
     {
       type: "blank",
       q: "Complete the warp reduction step so all 32 lanes participate.",
@@ -1498,14 +1825,18 @@ const quizData = {
       explain: "Elementwise chains are pure bandwidth: each stage pays a read and a write of N elements. Fused, the value is loaded once, transformed three times in registers, stored once — traffic drops from 6N to 2N accesses (3× for the chain), with launch overhead savings on top. Fusion is the highest-leverage fix for memory-bound pipelines, which is why compilers (XLA, torch.compile) fight for it."
     },
     {
-      q: "What makes a grid-stride loop preferable to assuming one thread per element?",
+      q: "A correct scatter-add spends most of its time on atomics because many neighboring items share the same destination key. Which optimization preserves correctness and targets the contention?",
+      pre: "// duplicate indices are legal\natomicAdd(&out[index[i]], value[i]);",
       options: [
-        ["The kernel handles any problem size with any launch shape, and each thread processing several elements adds ILP and amortizes setup cost", true],
-        ["It removes the need for bounds checking", false],
-        ["It guarantees 100% occupancy automatically", false],
-        ["The compiler vectorizes it into float4 loads automatically", false]
+        ["Within each warp, group lanes with the same destination (for example with __match_any_sync), reduce each group, and issue one atomic per distinct key; consider sort/reduce-by-key for extreme reuse", true],
+        ["Replace atomicAdd with out[index[i]] += value[i] because nearby duplicates arrive together", false],
+        ["Use one global mutex around the entire scatter", false],
+        ["Increase occupancy until simultaneous atomics stop colliding", false]
       ],
-      explain: "for (i = tid; i < n; i += gridDim.x * blockDim.x) decouples grid size from n: launch a grid sized to fill the machine (e.g. a few blocks per SM) and let threads loop. Benefits: no oversized grids, correct for any n (the loop condition is the bounds check for full iterations — though the classic guard remains), per-thread ILP from multiple elements, and easy tuning/debugging (launch one block, it still works)."
+      explain: "Duplicate destinations make a plain store a data race, so the baseline atomic is correct. When a warp contains repeated keys, pre-combining those values turns many serialized atomics into one per key while retaining the global atomic for conflicts with other warps. The win depends on key locality; random unique keys gain little, while heavily repeated data may justify sorting and a segmented reduction.",
+      sources: [
+        { label: "NVIDIA warp aggregation by key", url: "https://developer.nvidia.com/blog/voting-and-shuffling-optimize-atomic-operations/" }
+      ]
     },
     {
       q: "How does __shfl_down_sync speed up the last steps of a block reduction?",
@@ -1518,14 +1849,18 @@ const quizData = {
       explain: "Once a reduction is down to one warp (32 values), shuffles finish it: v += __shfl_down_sync(0xffffffff, v, 16/8/4/2/1) — five register exchanges with no barrier, since warp lanes are synchronized by the mask. The pattern: block tree-reduce in shared memory to 32 (or one value per warp), then shuffle. CUB's BlockReduce wraps exactly this and is the production answer."
     },
     {
-      q: "A histogram kernel where all threads atomicAdd into one 256-bin global array is slow. What is the standard fix?",
+      q: "Fusing three kernels removes two intermediate buffers, yet the fused version is 25% slower. Which evidence best explains when fusion went too far?",
+      pre: "Before: 52 registers/thread, no spills, 62% achieved occupancy\nFused:  148 registers/thread, local-memory spills, 18% achieved occupancy",
       options: [
-        ["Privatization — each block accumulates into its own shared-memory histogram, then atomically merges the 256 bins into the global one once at the end", true],
-        ["Replace atomicAdd with normal additions since collisions are rare", false],
-        ["Sort the entire input on the host first", false],
-        ["Use one thread to compute the whole histogram serially", false]
+        ["The larger live state caused register pressure, spills, and too few resident warps; shorten live ranges, split at a sensible boundary, or retile and re-measure", true],
+        ["Fusion can never reduce performance, so the timing must be wrong", false],
+        ["The fused kernel needs a larger intermediate global buffer", false],
+        ["Raise maxrregcount until occupancy reaches 100%, regardless of spill traffic", false]
       ],
-      explain: "Thousands of threads hammering 256 global addresses serialize at L2 — atomics to the same address are a queue, not parallel work. Privatized per-block copies in shared memory make collisions block-local and cheap (shared-memory atomics are fast), and the final merge costs only 256 global atomics per block. Same recipe for any contended accumulator; the extreme version privatizes per warp or per thread. Removing normal atomics where collisions 'seem rare' is simply a data race."
+      explain: "Fusion trades launches and global traffic for a larger kernel with more simultaneously live values. Here the compiler and profiler show the cost directly: registers tripled, spills introduced local-memory traffic, and latency-hiding capacity collapsed. Preserve the profitable producer/consumer locality but break the fusion where state explodes, or restructure the tile. Forcing a register cap can worsen the exact spill mechanism already visible.",
+      sources: [
+        { label: "CUDA Best Practices — register pressure and occupancy", url: "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/#register-pressure" }
+      ]
     },
     {
       q: "Why do high-performance kernels pass tile sizes as template parameters instead of runtime arguments?",
@@ -1586,6 +1921,33 @@ const quizData = {
         ["Integer and floating-point pipelines within one warp", false]
       ],
       explain: "With one buffer the block alternates: load (SM waits) → compute → load… Double buffering issues the async copy for the next tile, computes on the current one, then waits only on the copy's barrier — in steady state loads are fully hidden if compute per tile ≥ load time. cp.async (Ampere) made this cheap by skipping register staging; TMA (Hopper/Blackwell) moves whole tiles with dedicated hardware. This is the backbone of modern GEMM pipelines."
+    },
+    {
+      q: "An nsys trace shows a repeated inference step with 180 kernels, most 2–5 µs long, separated by CPU launch gaps. The kernels themselves have healthy ncu profiles. What is the highest-leverage next experiment?",
+      options: [
+        ["Capture the stable dependency sequence in a CUDA Graph (and fuse adjacent elementwise stages where maintainable) so repeated execution pays far fewer host submission costs", true],
+        ["Increase every kernel to 1024 threads per block", false],
+        ["Collect the ncu full metric set for all 180 kernels on every request", false],
+        ["Move inputs to pageable host memory so launches can queue faster", false]
+      ],
+      explain: "When useful GPU work is only a few microseconds, host setup and submission can be a material fraction of the step. CUDA Graphs define and instantiate the DAG once, then relaunch it with low overhead; fusion can remove both launches and intermediate memory traffic but is a larger code change. Kernel-level occupancy tuning does not remove the visible CPU gaps, and broad ncu collection adds replay overhead rather than fixing them.",
+      sources: [
+        { label: "CUDA Graphs", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cuda-graphs.html" },
+        { label: "Nsight Systems User Guide", url: "https://docs.nvidia.com/nsight-systems/UserGuide/" }
+      ]
+    },
+    {
+      q: "A grid assigns one variable-length record to each block. A few indivisible records take 100× longer, so nsys shows a long tail with most SMs idle. Which redesign targets the actual imbalance?",
+      options: [
+        ["Split long records into independently schedulable chunks and merge their partial results; bucket short records by cost, optionally feeding chunks through a persistent queue", true],
+        ["Raise the block size so every short record uses more threads", false],
+        ["Force 100% theoretical occupancy with maxrregcount", false],
+        ["Put a grid-wide barrier after every record", false]
+      ],
+      explain: "CUDA already schedules pending record-blocks as SMs become free, so a queue that still hands out whole record IDs cannot split the final pathological records and does not remove their tail. The heavy work must become smaller independent chunks, followed by a merge/reduction of partial results; cost bucketing keeps short records efficient, and a persistent queue can distribute the chunks dynamically. Occupancy cannot compensate when the remaining work exists in only a few indivisible blocks.",
+      sources: [
+        { label: "CUDA programming model — independent block scheduling", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/programming-model.html#thread-blocks-and-grids" }
+      ]
     }
   ],
   cpp: [
@@ -1657,24 +2019,32 @@ const quizData = {
       explain: "constexpr erases work from the kernel entirely: precomputed twiddle tables, derived tile geometry, static_assert-checked configurations. A constexpr function needs no __device__ annotation to be used in constant expressions, and nvcc's --expt-relaxed-constexpr flag lets device code call ordinary host constexpr functions (much of <cmath>-style logic). Combined with templates it's how kernel libraries compute everything computable before the GPU ever runs."
     },
     {
-      q: "Which is a correct C++17 structured binding?",
+      q: "This C++ RAII code intermittently corrupts an asynchronous H2D upload. What lifetime rule did it violate?",
+      pre: "void enqueue(float* d, size_t n, cudaStream_t s) {\n  PinnedBuffer h(n);\n  fill(h.data(), n);\n  cudaMemcpyAsync(d, h.data(), n*sizeof(float),\n                  cudaMemcpyHostToDevice, s);\n} // h's destructor frees pinned memory here",
       options: [
-        ["auto [lo, hi] = std::minmax_element(v.begin(), v.end());", true],
-        ["auto (lo, hi) = std::minmax_element(v.begin(), v.end());", false],
-        ["std::tie{lo, hi} = std::minmax_element(v.begin(), v.end());", false],
-        ["auto lo, hi = std::minmax_element(v.begin(), v.end());", false]
+        ["The pinned source allocation must remain alive and unmodified until the stream has completed the copy; retain ownership until an event completes or use a stream-aware buffer pool", true],
+        ["RAII objects cannot own pinned memory", false],
+        ["cudaMemcpyAsync copies the pointer value, so the buffer may be freed immediately", false],
+        ["Marking PinnedBuffer's destructor constexpr makes the lifetime safe", false]
       ],
-      explain: "Structured bindings use square brackets: auto [a, b] = expr; unpacking pairs, tuples, arrays, and plain structs into named variables — no pre-declared variables or std::tie (the pre-17 workaround, which also uses parentheses and assignment semantics). Host-side CUDA code uses this constantly for pair-returning APIs like minmax, equal_range, or occupancy queries."
+      explain: "Asynchronous submission does not extend a C++ object's lifetime. The function returns and frees the page-locked storage while the DMA engine may still read it, producing a use-after-free outside ordinary CPU sequencing. Model completion explicitly: move the buffer into an in-flight request, recycle it only after an event, or use a pool whose lease is tied to the stream. A device-wide sync in every destructor is safe but destroys concurrency.",
+      sources: [
+        { label: "CUDA asynchronous execution and copy completion", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html" }
+      ]
     },
     {
-      q: "What advantage does std::string_view give over const std::string& for read-only parameters?",
+      q: "Why does this C++17 launch configuration contain a dangling name?",
+      pre: "struct LaunchConfig { std::string_view kernel; };\nLaunchConfig make_config(int tile) {\n  std::string name = \"gemm_\" + std::to_string(tile);\n  return {name};\n}",
       options: [
-        ["It's a non-owning pointer+length view: string literals and substrings bind without allocating or copying, and slicing is O(1)", true],
-        ["It automatically interns strings for faster comparison", false],
-        ["It is mutable, unlike const references", false],
-        ["It null-terminates substrings for C APIs", false]
+        ["string_view is non-owning; `name` is destroyed on return, so stored configurations must own a std::string or borrow storage whose lifetime is explicitly longer", true],
+        ["std::to_string returns device memory that is freed after the next kernel", false],
+        ["string_view is valid only for string literals, never std::string", false],
+        ["The view becomes safe if LaunchConfig is declared constexpr", false]
       ],
-      explain: "Passing a literal to const std::string& constructs a temporary std::string (allocation); substr() on a string copies. string_view wraps existing characters — any source, zero allocation, remove_prefix/substr in O(1). Caveats: it doesn't own (don't outlive the source) and isn't guaranteed null-terminated (don't hand .data() to C APIs expecting termination). Ideal for parsing kernel configs, CLI args, and log processing in host harness code."
+      explain: "A string_view is a pointer-length pair, not a lifetime manager. It can cheaply borrow a string during parsing or lookup, but persisting it beyond the source object's lifetime leaves a dangling pointer. This is the production side of C++17 vocabulary types: choose string_view at non-owning API boundaries and std::string in objects that store the value.",
+      sources: [
+        { label: "C++ working draft — string.view", url: "https://eel.is/c++draft/string.view" }
+      ]
     },
     {
       q: "A lookup function may find no result. The most expressive C++17 signature is:",
@@ -1704,21 +2074,53 @@ const quizData = {
         ["nvcc silently converts reference captures to value captures", false],
         ["Lambdas cannot be used in device code at all", false]
       ],
-      explain: "The lambda object is copied to the device like any kernel argument; a [&] capture embeds host addresses that the GPU either can't dereference or reads as garbage. Correct: capture scalars by value and pass device pointers explicitly — [=, d_ptr] style — with nvcc's --extended-lambda enabling __device__ lambdas. It's the same rule as all kernel arguments: value semantics at the host/device boundary, pointers only if they point to device memory."
+      explain: "The lambda object is copied to the device like any kernel argument; a [&] capture embeds host addresses that the GPU either can't dereference or reads as garbage. Correct: capture odr-used scalars and device pointers with [=], or list them explicitly such as [scale, d_ptr], with nvcc's --extended-lambda enabling __device__ lambdas. (The tempting syntax [=, d_ptr] is itself invalid C++ because a by-copy default cannot repeat an explicit by-copy capture.) It's the same rule as all kernel arguments: value semantics at the host/device boundary, pointers only if they point to device-accessible memory."
+    },
+    {
+      type: "multi",
+      q: "You are reviewing a move-only C++17 `DeviceBuffer` RAII wrapper used by asynchronous kernels. Which properties are essential?",
+      options: [
+        ["Delete copy construction/assignment so two objects cannot free the same allocation", true],
+        ["Move operations transfer the pointer and null the source", true],
+        ["The destructor is noexcept and never lets a cleanup failure escape", true],
+        ["Its documented lifetime contract prevents destruction while queued stream work still uses the pointer", true],
+        ["The destructor calls cudaDeviceSynchronize unconditionally after every use", false],
+        ["Copying is safe if both wrappers compare their pointer before freeing", false]
+      ],
+      explain: "RAII solves ownership only when ownership is unique and moves leave one live owner. CUDA adds an asynchronous-lifetime dimension: a host object can reach its destructor while a previously launched kernel still holds the device pointer. Production designs make the stream part of the lifetime contract, defer release with stream ordering, or require an explicit completion token. A device-wide sync in every destructor is safe but destroys concurrency and hides the dependency instead of modeling it.",
+      sources: [
+        { label: "CUDA Best Practices Guide", url: "https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" }
+      ]
+    },
+    {
+      q: "An allocation is created with `cudaMallocAsync` in stream A, consumed in stream B, and freed in stream C. The code usually works but fails under load. What is missing?",
+      pre: "cudaMallocAsync(&p, bytes, streamA);\nuse<<<grid, block, 0, streamB>>>(p);\ncudaFreeAsync(p, streamC);",
+      options: [
+        ["Explicit event dependencies: B waits for allocation readiness from A, and C waits for B's last use before the free", true],
+        ["A volatile qualifier on p so every stream sees the pointer", false],
+        ["cudaGetLastError after cudaMallocAsync; it orders all streams", false],
+        ["Nothing—Async APIs are globally ordered by submission time", false]
+      ],
+      explain: "Stream ordering is local to each stream. The allocation must happen-before every use, and the last use must happen-before the asynchronous free. Record an event in A and make B wait; record completion in B and make C wait before freeing, or keep the whole lifetime in one stream. Host submission order across independent streams is not a device dependency.",
+      sources: [
+        { label: "Stream-ordered memory allocator", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/stream-ordered-memory-allocation.html" }
+      ]
     }
   ],
   port: [
     {
-      type: "blank",
-      q: "Complete the HLSL compute-shader equivalent of CUDA's __shared__ tile.",
-      pre: "[numthreads(16, 16, 1)]\nvoid main(uint3 gtid : SV_GroupThreadID) {\n  ______ float tile[16][16];\n  ...\n}",
+      q: "An HLSL compute shader dispatches ceil(width/16) × ceil(height/16) groups, but the last row corrupts a UAV. What is missing?",
+      pre: "[numthreads(16, 16, 1)]\nvoid main(uint3 id : SV_DispatchThreadID) {\n  output[id.y * width + id.x] = input[id.y * width + id.x];\n}",
       options: [
-        ["groupshared", true],
-        ["__shared__", false],
-        ["shared", false],
-        ["threadgroup", false]
+        ["A bounds guard on the global dispatch ID, such as `if (id.x >= width || id.y >= height) return;`, because the rounded-up groups contain tail threads", true],
+        ["SV_DispatchThreadID must be divided by numthreads before indexing", false],
+        ["The UAV needs groupshared storage for every element", false],
+        ["Dispatch dimensions must be rounded down so no tail group is launched", false]
       ],
-      explain: "groupshared is HLSL's keyword for the per-group scratchpad — same hardware, same bank-conflict physics as CUDA shared memory. The wrong options are all real keywords from other languages: __shared__ is CUDA/HIP, shared is GLSL, threadgroup is Metal. One concept, four spellings — which is exactly why the mapping table is worth memorizing for a role that lists CUDA, HIP, Slang, HLSL, and GLSL in one sentence."
+      explain: "SV_DispatchThreadID is the global thread coordinate formed from group ID and the local thread ID. Rounding group counts up is the correct way to cover an arbitrary extent, but it necessarily launches threads beyond the logical image. Guard them just like a CUDA tail block. Rounding down drops valid pixels, and group-local scratch memory does not make an out-of-range global address safe.",
+      sources: [
+        { label: "Microsoft HLSL — SV_DispatchThreadID", url: "https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/sv-dispatchthreadid" }
+      ]
     },
     {
       type: "blank",
@@ -1770,14 +2172,21 @@ const quizData = {
       explain: "Mechanical translation first (it's free), then the semantic issues tools can't catch (the 64-lane wavefront trap), then the ecosystem gaps (libraries), then prove correctness against the original before believing any performance number, and finally re-profile — different cache sizes, LDS behavior, and wave width mean the CUDA-era tuning decisions must be re-verified, not assumed."
     },
     {
-      q: "A CUDA warp-shuffle reduction hardcoding 32 lanes is ported to an AMD MI-series (CDNA) GPU with HIP. What happens?",
+      type: "multi",
+      q: "A hipified extension compiles and passes its tests on an NVIDIA CI runner. Before claiming production AMD support, which validation work is still required?",
       options: [
-        ["It silently computes wrong results — CDNA wavefronts are 64 lanes, so a 32-wide shuffle tree only reduces half the wavefront; use warpSize or template the width", true],
-        ["It works unchanged, since HIP emulates 32-lane warps", false],
-        ["It fails to compile until renamed to __shfl_down_hip", false],
-        ["It runs at exactly half speed but produces correct results", false]
+        ["Build and execute on representative supported AMD gfx targets, not only through HIP's NVIDIA backend", true],
+        ["Add correctness cases for partial waves, tails, collectives, atomics, and the documented numerical tolerances", true],
+        ["Profile on each vendor and keep target-specific launch tuning or dispatch where measurements justify it", true],
+        ["Audit library substitutions and feature checks that HIPIFY can translate only mechanically", true],
+        ["A warning-free HIPIFY report proves both functional and performance portability", false],
+        ["Reuse the exact NVIDIA block sizes and performance thresholds on every AMD architecture", false]
       ],
-      explain: "The width trap is the classic porting bug: masks like 0xffffffff, loops 'for (offset = 16; …)', and smem[32] arrays all bake in 32. On 64-lane CDNA wavefronts the reduction tree stops halfway — results are wrong, not slow. Portable code parameterizes on warpSize (or a compile-time WAVE_SIZE), sizes scratch arrays accordingly, and uses full-wavefront masks. RDNA (gaming) parts are 32-wide, which hides the bug until the MI-series deployment."
+      explain: "HIP can target NVIDIA through a CUDA backend, which makes NVIDIA CI useful during an incremental port but does not exercise the AMD compiler, ROCm runtime, gfx feature set, wave behavior, or vendor libraries. Production support requires a real AMD build and execution, adversarial correctness tests, and separate profiling. Portable source may still need platform-aware library selection and measured launch dispatch; HIPIFY translates APIs and syntax, not those semantics.",
+      sources: [
+        { label: "AMD HIP porting guide", url: "https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_porting_guide.html" },
+        { label: "AMD HIPIFY documentation", url: "https://rocm.docs.amd.com/projects/HIPIFY/en/latest/" }
+      ]
     },
     {
       q: "What does the hipify tooling do?",
@@ -1790,24 +2199,33 @@ const quizData = {
       explain: "hipify-perl/hipify-clang rewrite API calls and headers; the kernel language and <<<>>> launches are already shared. HIP then compiles via ROCm for AMD or falls through to CUDA for NVIDIA — one codebase, two vendors. What the tools can't fix is semantic width assumptions (wavefront 64), inline PTX, and NVIDIA-only library calls (cuBLAS→hipBLAS/rocBLAS is a mostly-mechanical rename)."
     },
     {
-      q: "Which HLSL compute-shader construct corresponds to CUDA's __shared__ memory plus __syncthreads()?",
+      q: "This tiled HLSL shader hangs or corrupts only on right-edge groups. What is the synchronization bug?",
+      pre: "if (id.x < width) {\n  tile[gtid.x] = input[id.x];\n  GroupMemoryBarrierWithGroupSync();\n  output[id.x] = tile[(gtid.x + 1) & 255];\n}",
       options: [
-        ["groupshared variables plus GroupMemoryBarrierWithGroupSync()", true],
-        ["cbuffer plus DeviceMemoryBarrier()", false],
-        ["RWStructuredBuffer plus WaveBarrier()", false],
-        ["static variables plus AllMemoryBarrier()", false]
+        ["The group barrier is inside a divergent bounds branch; every group thread must reach it, so out-of-range lanes should write a neutral tile value, synchronize unconditionally, then guard only the final global store", true],
+        ["GroupMemoryBarrierWithGroupSync is valid only in pixel shaders", false],
+        ["The barrier must be replaced with a wave intrinsic because a group has exactly one wave", false],
+        ["The bitwise wrap expression makes global memory incoherent", false]
       ],
-      explain: "The compute model maps directly: [numthreads(x,y,z)] = block dims, SV_GroupThreadID = threadIdx, SV_DispatchThreadID = global index, groupshared = shared memory, GroupMemoryBarrierWithGroupSync = __syncthreads. Warp-level ops arrived in Shader Model 6 as wave intrinsics (WaveActiveSum ≈ shuffle reduction, WaveGetLaneIndex ≈ lane id). A tiled reduction ports between CUDA and HLSL as renames — the optimization reasoning is identical."
+      explain: "A group synchronization intrinsic is collective: behavior is undefined when only the in-range lanes of a partial group execute it. Use the same structure as a CUDA tiled kernel—conditional load of real or identity data, unconditional group barrier, computation, and a conditional global write. Wave operations are not a replacement when the group spans multiple waves.",
+      sources: [
+        { label: "Microsoft HLSL — GroupMemoryBarrierWithGroupSync", url: "https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/groupmemorybarrierwithgroupsync" }
+      ]
     },
     {
-      q: "What is Slang?",
+      q: "This HLSL shader intends to write one sum for all 256 threads in a thread group, but writes only a partial sum. What is wrong?",
+      pre: "[numthreads(256, 1, 1)]\nvoid reduce(uint gi : SV_GroupIndex, uint3 gid : SV_GroupID) {\n  float s = WaveActiveSum(input[gid.x * 256 + gi]);\n  if (gi == 0) output[gid.x] = s;\n}",
       options: [
-        ["A modular shading language (generics, interfaces, modules) that compiles one source to multiple targets — HLSL/DXIL, SPIR-V, Metal, and CUDA", true],
-        ["NVIDIA's proprietary replacement for PTX assembly", false],
-        ["A Python DSL that generates CUDA kernels", false],
-        ["The scripting language inside Nsight Compute", false]
+        ["WaveActiveSum covers only the active lanes in the current hardware wave; emit one partial per wave to groupshared memory, synchronize the group, then reduce those partials", true],
+        ["WaveActiveSum already covers the full numthreads group, but SV_GroupIndex starts at one", false],
+        ["Adding GroupMemoryBarrierWithGroupSync immediately before the store combines the wave sums automatically", false],
+        ["Replace SV_GroupIndex with WaveGetLaneIndex so lane zero represents the whole group", false]
       ],
-      explain: "Slang (now hosted by Khronos) extends HLSL-style shading with real modularity — generics with interfaces instead of preprocessor #ifdef forests — and cross-compiles to the major GPU APIs plus CUDA, with automatic differentiation for graphics-ML work. The job listing groups it with CUDA/HIP/HLSL/GLSL because the kernel-optimization mindset (occupancy, memory shapes, wave ops) applies unchanged across all of them."
+      explain: "A 256-thread group can contain several hardware waves, while wave intrinsics communicate only within the current wave's active lanes. Group thread zero therefore writes the first wave's result, not the group total. A correct hierarchical reduction has one lane per wave publish a partial, reaches an unconditional group barrier, and lets one wave combine the partials while accounting for the runtime wave width.",
+      sources: [
+        { label: "Microsoft HLSL — WaveActiveSum", url: "https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/waveallsum" },
+        { label: "Microsoft HLSL Shader Model 6 wave operations", url: "https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/hlsl-shader-model-6-0-features-for-direct3d-12" }
+      ]
     },
     {
       q: "What new tensor-core capability does the Blackwell generation add for inference throughput?",
@@ -1828,6 +2246,35 @@ const quizData = {
         ["It automatically fuses consecutive kernels", false]
       ],
       explain: "Pre-Hopper, feeding tensor cores meant warps doing address arithmetic and cp.async issue for every tile — instructions and registers stolen from math. A TMA descriptor describes the multidimensional tile once; the engine then moves whole tiles asynchronously, completing against an mbarrier, while warps compute. Combined with thread block clusters (blocks sharing distributed shared memory), it's how Hopper/Blackwell GEMM pipelines keep tensor cores saturated — and vendor libraries use it for you."
+    },
+    {
+      q: "A reduction hardcodes 32-lane shuffle steps and is being ported to an AMD target where wavefront width may differ. What is the maintainable fix?",
+      options: [
+        ["Express the collective through a subgroup/tile abstraction with an explicit logical width, or dispatch a width-specific implementation after querying the target; do not silently assume 32", true],
+        ["Run only the first 32 lanes of every AMD wavefront and ignore the rest", false],
+        ["Replace shuffles with volatile global memory so width no longer matters", false],
+        ["Compile the CUDA binary unchanged because HIP always emulates warpSize=32", false]
+      ],
+      explain: "The algorithm's logical group size is part of its correctness contract. Cooperative-group tiles and equivalent subgroup abstractions make that contract explicit; a portable wrapper can specialize for the target width and participation mask. Blindly changing only the loop constants leaves masks, ballots, lane IDs, and partial groups inconsistent, while idling half a wave throws away throughput.",
+      sources: [
+        { label: "HIP porting guide", url: "https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/hip_porting_guide.html" },
+        { label: "CUDA Cooperative Groups", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/cooperative-groups.html" }
+      ]
+    },
+    {
+      type: "multi",
+      q: "You ship an SM90 TMA fast path but the same binary must run on older supported GPUs. Which release-engineering choices are sound?",
+      options: [
+        ["Query runtime capabilities and dispatch to a compatible cp.async or ordinary tiled fallback", true],
+        ["Package cubins for supported architectures plus an appropriate PTX fallback in the fatbin", true],
+        ["Test both the fast and fallback paths for correctness and performance in CI", true],
+        ["Compile only sm_90 machine code and expect the driver to translate it backward", false],
+        ["Call the TMA kernel on every device and recover from an illegal-instruction error", false]
+      ],
+      explain: "A cubin is not backward- or cross-major compatible by magic. A production binary carries code for its supported targets, may include PTX for forward JIT compatibility, and selects features based on the actual device. The fallback is a first-class path with its own tests—not an exception handler after launching unsupported instructions. This question separates portable feature use from architecture-name memorization.",
+      sources: [
+        { label: "CUDA cubins, fatbins, and PTX compatibility", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/cuda-platform.html#cubins-and-fatbins" }
+      ]
     }
   ],
   case: [
@@ -1925,12 +2372,12 @@ const quizData = {
     {
       q: "You add a second stream and switch to cudaMemcpyAsync, but nsys still shows copy → kernel → copy strictly serialized. Most likely cause?",
       options: [
-        ["The host buffers are pageable — cudaMemcpyAsync silently degrades to staged, effectively synchronous copies; allocate them with cudaMallocHost/cudaHostAlloc (pinned) to get real overlap", true],
+        ["The host buffers are pageable—runtime staging/synchronization can prevent reliable overlap; use cudaMallocHost/cudaHostAlloc (pinned), then verify the device and timeline support the intended overlap", true],
         ["The GPU has no copy engines, so overlap is impossible", false],
         ["cudaStreamSynchronize must be called after each async copy to enable overlap", false],
         ["PCIe cannot transfer data while any kernel is running", false]
       ],
-      explain: "The copy engine DMAs from physical pages, so an async copy from pageable memory goes through an internal pinned staging buffer and loses its asynchrony — the API succeeds, the overlap just never happens, which makes this the classic silent pipeline killer. Pinned allocations plus per-stream cudaMemcpyAsync give genuine copy/compute overlap (modern GPUs have multiple copy engines precisely for simultaneous H2D + compute + D2H). Extra syncs would serialize things further; the trap is that nothing errors — only the timeline tells you."
+      explain: "Copy engines DMA from stable physical pages. With pageable buffers the runtime may synchronize and stage through internal pinned memory, so behavior depends on copy direction and runtime details and reliable overlap is not guaranteed. Pinned allocations plus per-stream cudaMemcpyAsync make overlap possible; the device's asyncEngineCount and the nsys timeline tell you what the hardware actually overlaps. Extra synchronizations would serialize the pipeline further—the key is that the API can succeed even when the intended concurrency never appears."
     },
     {
       q: "A memory-bound kernel sits at 93% DRAM SOL with sectors/request 4.0 and is already fused with its neighbors. Your lead asks for another 2×. The principal-level answer is:",
@@ -1952,6 +2399,34 @@ const quizData = {
         "Relax the cap (or tune __launch_bounds__ per-kernel) and re-measure both performance and correctness"
       ],
       explain: "Reproduce before theorizing — many '3× regressions' are unlocked clocks or cold-start timing. Then follow the chain from cheapest evidence to fix: the compiler report shows spills exist, the profiler shows they're what actually hurts (occupancy went UP, but every spilled register became a memory access in the hot loop), and only then do you change the build. The general lesson: occupancy bought by force-spilling registers is usually a bad trade, and each investigative step de-risks the next."
+    },
+    {
+      q: "A service reports `cudaErrorIllegalAddress` at a harmless-looking cudaMemcpyAsync, but the preceding custom kernel launch returned normally. What is the best debugging interpretation?",
+      pre: "custom<<<grid, block, 0, stream>>>(p, n);\n// no error check here\ncudaMemcpyAsync(host, p, bytes, cudaMemcpyDeviceToHost, stream); // reports error",
+      options: [
+        ["The kernel likely faulted asynchronously and the later API surfaced the pending error; check launch configuration immediately, add a sync at a temporary attribution boundary, then run Compute Sanitizer memcheck with line info", true],
+        ["cudaMemcpyAsync caused the earlier kernel to access invalid memory", false],
+        ["Ignore the error and call cudaGetLastError until it clears", false],
+        ["Replace cudaMemcpyAsync with memcpy so the GPU error becomes synchronous", false]
+      ],
+      explain: "Kernel launch syntax returns before execution finishes. `cudaGetLastError` immediately after launch catches configuration/launch errors, while a stream or device synchronization at a deliberate debug boundary attributes execution faults. Compute Sanitizer memcheck then identifies out-of-bounds or misaligned accesses. The production fix is the invalid access—not permanent device-wide synchronization, which would only serialize the service.",
+      sources: [
+        { label: "CUDA asynchronous execution", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html" },
+        { label: "Compute Sanitizer", url: "https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html" }
+      ]
+    },
+    {
+      q: "A parallel float reduction is race-free, but its last few bits change when the block size changes and occasionally across runs with atomics. The test requires bitwise equality. What is the right response?",
+      options: [
+        ["Explain that floating-point addition is non-associative and atomic order is scheduling-dependent; use a tolerance when the contract allows, or implement a fixed reduction tree/order (and control math flags) when reproducibility is required", true],
+        ["Add volatile to the accumulator to force IEEE ordering", false],
+        ["The changing bits prove a data race, so add __syncthreads after every addition", false],
+        ["Use memcmp only on the first 31 bits of each float", false]
+      ],
+      explain: "Different valid reduction trees round at different points, and atomics do not promise a stable arrival order. That can change low bits without any race. The product requirement decides the design: numerical tolerance and error bounds for ordinary scientific/ML work, or a deterministic multi-pass tree and controlled compiler settings for reproducible results. Sanitizers remain useful to rule out races, but synchronization cannot make an unordered global atomic sequence deterministic.",
+      sources: [
+        { label: "CUDA floating-point computation", url: "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html#associativity" }
+      ]
     }
   ]
 };
@@ -1963,6 +2438,24 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text) node.textContent = text;
   return node;
+}
+
+function buildExplanation(item, suffix = "") {
+  const box = el("div", "explain");
+  box.appendChild(document.createTextNode(item.explain + suffix));
+  if (item.sources && item.sources.length) {
+    const sourceLine = el("p", "q-source", "Source: ");
+    item.sources.forEach((source, index) => {
+      if (index) sourceLine.appendChild(document.createTextNode(" · "));
+      const link = el("a", "", source.label);
+      link.href = source.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      sourceLine.appendChild(link);
+    });
+    box.appendChild(sourceLine);
+  }
+  return box;
 }
 
 function shuffle(arr) {
@@ -2017,8 +2510,7 @@ function renderMulti(container, item, number, sectionKey) {
   card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
   if (item.pre) card.appendChild(el("pre", "qpre", item.pre));
   const optionsBox = el("div", "options");
-  const explain = el("div", "explain");
-  explain.appendChild(document.createTextNode(item.explain));
+  const explain = buildExplanation(item);
 
   const buttons = [];
   for (const [text, isCorrect] of shuffle(item.options)) {
@@ -2065,10 +2557,10 @@ function renderOrder(container, item, number, sectionKey) {
   const placeholder = el("p", "placeholder", "Click the steps below in order — first step first. Click a chosen step to send it back.");
   chosenBox.appendChild(placeholder);
   const optionsBox = el("div", "options");
-  const explain = el("div", "explain");
-  explain.appendChild(document.createTextNode(
-    item.explain + " Correct chain: " + item.steps.map((s, i) => `(${i + 1}) ${s}`).join(" → ") + "."
-  ));
+  const explain = buildExplanation(
+    item,
+    " Correct chain: " + item.steps.map((s, i) => `(${i + 1}) ${s}`).join(" → ") + "."
+  );
 
   const chosen = [];
   let done = false;
@@ -2140,8 +2632,7 @@ function renderQuestion(container, item, number, sectionKey) {
   card.appendChild(el("p", "q", `Q${number}. ${item.q}`));
   if (item.pre) card.appendChild(el("pre", "qpre", item.pre));
   const optionsBox = el("div", "options");
-  const explain = el("div", "explain");
-  explain.appendChild(document.createTextNode(item.explain));
+  const explain = buildExplanation(item);
 
   const buttons = [];
   for (const [text, isCorrect] of shuffle(item.options)) {

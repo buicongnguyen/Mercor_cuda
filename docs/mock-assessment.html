@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="An unofficial, original Mercor-style CUDA assessment practice simulation with six realistic GPU engineering tasks and a self-evaluation rubric.">
+  <title>Unofficial CUDA Mock Assessment</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    :root { --danger-foreground:#ffffff; }
+    @media (prefers-color-scheme:dark) { :root { --danger-foreground:#18202b; } }
+    :root[data-site-theme="light"] { --danger-foreground:#ffffff; }
+    .notice { padding:14px 16px; border:1px solid var(--warn); border-left-width:4px; border-radius:8px; background:var(--warn-soft); }
+    .notice strong { color:var(--warn); }
+    .brief-grid,.score-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
+    .brief-card,.score-card { padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:var(--shadow); }
+    .brief-card p,.score-card p { margin-bottom:0; color:var(--muted); }
+    .mode-picker { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin:16px 0; padding:0; border:0; }
+    .mode-picker legend { width:100%; margin-bottom:8px; font-weight:700; }
+    .mode-option { display:flex; gap:10px; min-height:88px; padding:13px; border:1px solid var(--line); border-radius:8px; background:var(--bg); cursor:pointer; }
+    .mode-option:has(input:checked) { border-color:var(--accent); background:var(--accent-soft); }
+    .mode-option input { margin-top:5px; accent-color:var(--accent); }
+    .mode-option strong,.mode-option span { display:block; }
+    .mode-option span { margin-top:4px; color:var(--muted); font-size:13px; }
+    button.action { min-height:40px; padding:8px 14px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
+    button.action:hover { background:var(--accent-strong); border-color:var(--accent-strong); }
+    button.action.secondary { border-color:var(--line); background:var(--panel); color:var(--text); }
+    button.action.secondary:hover { border-color:var(--accent); background:var(--accent-soft); color:var(--accent-strong); }
+    button.action.danger { border-color:var(--warn); background:var(--warn); color:var(--danger-foreground); }
+    :root[data-site-theme="light"] button.action.danger { border-color:#835500; background:#835500; }
+    button.action:disabled { cursor:not-allowed; opacity:.55; }
+    .assessment-bar { position:sticky; top:0; z-index:8; display:grid; grid-template-columns:repeat(4,minmax(110px,1fr)) auto; gap:8px; align-items:center; margin:0 0 18px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:var(--shadow); }
+    .status-cell { min-width:0; padding:4px 8px; }
+    .status-cell span { display:block; color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; }
+    .status-cell strong,.status-cell time { display:block; overflow:hidden; color:var(--text); font-size:15px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+    .mock-task { min-width:0; max-width:100%; margin:14px 0; padding:18px; border:1px solid var(--line); border-radius:9px; background:var(--panel); box-shadow:var(--shadow); scroll-margin-top:100px; }
+    .task-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-wrap:wrap; }
+    .task-head h3 { margin-bottom:4px; }
+    .task-meta { display:flex; gap:7px; flex-wrap:wrap; }
+    .pill { display:inline-flex; align-items:center; min-height:26px; padding:2px 9px; border:1px solid var(--accent); border-radius:999px; background:var(--accent-soft); color:var(--accent-strong); font-size:12px; font-weight:700; }
+    .prompt-block,.acceptance { min-width:0; max-width:100%; margin:12px 0; padding:12px 14px; border-radius:7px; background:var(--bg); border:1px solid var(--line); }
+    .acceptance { border-left:3px solid var(--accent); }
+    .prompt-block p:last-child,.acceptance p:last-child { margin-bottom:0; }
+    .task-label { display:block; margin:14px 0 6px; font-weight:700; }
+    .task-answer,.evaluator-note { width:100%; min-height:190px; resize:vertical; padding:12px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--text); font:14px/1.5 Consolas,Menlo,monospace; }
+    .task-answer:focus,.evaluator-note:focus { outline:3px solid color-mix(in srgb,var(--accent) 28%,transparent); border-color:var(--accent); }
+    .code-answer { min-height:350px; }
+    .code { display:block; max-width:100%; margin:10px 0 0; padding:13px 15px; overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--text); font:13px/1.5 Consolas,Menlo,monospace; }
+    .review-row { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; margin-top:10px; color:var(--muted); font-size:13px; }
+    .review-row label { display:inline-flex; gap:7px; align-items:center; font-weight:700; cursor:pointer; }
+    .review-row input { accent-color:var(--warn); }
+    .word-limit-over { color:var(--warn); }
+    .metric-table { width:100%; min-width:620px; }
+    .metric-table th,.metric-table td { padding:9px 10px; }
+    .metric-table code { white-space:nowrap; }
+    .metric-scale { display:grid; gap:8px; padding:13px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+    .metric-row { display:grid; grid-template-columns:150px minmax(0,1fr) 64px; gap:8px; align-items:center; }
+    .metric-row > span { color:var(--muted); font-size:12px; font-weight:700; }
+    .metric-track { min-width:0; height:18px; overflow:hidden; border:1px solid var(--line); border-radius:4px; background:var(--panel); }
+    .metric-fill { height:100%; background:var(--accent); }
+    .metric-fill.warn { background:var(--warn); }
+    .metric-value { text-align:right; color:var(--text)!important; }
+    .compare-bars { display:grid; grid-template-columns:110px 1fr 1fr; gap:7px; align-items:center; padding:13px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+    .compare-bars .head { color:var(--muted); font-size:11px; font-weight:700; text-align:center; text-transform:uppercase; }
+    .compare-label { color:var(--muted); font-size:12px; font-weight:700; }
+    .compare-cell { position:relative; min-height:28px; border:1px solid var(--line); border-radius:4px; background:var(--panel); }
+    .compare-cell i { display:block; height:26px; border-radius:3px; background:var(--accent); }
+    .compare-cell.after i { background:var(--warn); }
+    .compare-cell b { position:absolute; inset:3px 6px auto; color:var(--text); font-size:11px; text-shadow:0 1px var(--panel); }
+    .stream-diagram { display:grid; gap:9px; padding:13px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+    .stream-lane { display:grid; grid-template-columns:68px repeat(5,minmax(50px,1fr)); gap:5px; align-items:center; }
+    .stream-label { color:var(--muted); font-size:11px; font-weight:700; }
+    .stream-step { display:flex; min-height:34px; align-items:center; justify-content:center; padding:3px; border:1px solid var(--accent); border-radius:4px; background:var(--accent-soft); color:var(--text); font-size:10px; font-weight:700; text-align:center; }
+    .stream-step.warn { border-color:var(--warn); background:var(--warn-soft); color:var(--warn); }
+    .stream-step.empty { border-style:dashed; border-color:var(--line); background:transparent; color:var(--muted); }
+    .remediation-link { font-size:13px; font-weight:700; }
+    .inline-panel { margin:18px 0; padding:16px; border:1px solid var(--warn); border-radius:8px; background:var(--warn-soft); }
+    .inline-panel p:last-child { margin-bottom:0; }
+    .button-row { display:flex; flex-wrap:wrap; gap:9px; margin-top:12px; }
+    .hidden,[hidden] { display:none!important; }
+    .storage-warning { margin:10px 0; color:var(--warn); font-weight:700; }
+    .evaluator-task { margin:14px 0; padding:17px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+    .answer-review { margin:10px 0; padding:12px; overflow:auto; border:1px solid var(--line); border-radius:6px; background:var(--bg); white-space:pre-wrap; font:13px/1.5 Consolas,Menlo,monospace; }
+    .reference-answer { margin:12px 0; padding:10px 12px; border:1px solid var(--accent); border-radius:7px; background:var(--accent-soft); }
+    .reference-answer summary { color:var(--accent-strong); font-weight:700; cursor:pointer; }
+    .reference-answer p { margin:10px 0 0; }
+    .evaluator-rubric { min-width:0; margin:12px 0 0; padding:10px 12px; border:1px solid var(--line); border-radius:7px; }
+    .evaluator-rubric legend { padding:0 5px; font-weight:700; }
+    .signal-list,.rubric-list { margin:8px 0; padding-left:22px; }
+    .rubric-list { list-style:none; padding-left:0; }
+    .rubric-list li { margin:7px 0; }
+    .rubric-list label { display:flex; gap:8px; align-items:flex-start; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); cursor:pointer; }
+    .rubric-list input { margin-top:4px; accent-color:var(--accent); }
+    .rubric-list label > strong { margin-left:auto; white-space:nowrap; }
+    .critical-criterion { padding:1px 6px; border-radius:999px; background:var(--warn-soft); color:var(--warn); font-size:11px; font-weight:700; white-space:nowrap; }
+    .task-score { margin:10px 0; font-weight:700; }
+    .critical-cap { padding:9px 11px; border-left:3px solid var(--warn); background:var(--warn-soft); color:var(--warn); font-size:13px; }
+    .score-number { font-size:32px; line-height:1; color:var(--accent-strong); }
+    @media (max-width:780px) {
+      .assessment-bar { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .assessment-bar button { grid-column:1 / -1; }
+      .metric-row { grid-template-columns:100px minmax(0,1fr) 60px; }
+      .compare-bars { grid-template-columns:75px 1fr 1fr; }
+      .stream-diagram { overflow-x:auto; }
+      .stream-lane { min-width:560px; }
+    }
+    @media (max-width:440px) {
+      .mock-task { padding:14px; }
+      .task-answer { min-height:230px; }
+      .compare-bars { grid-template-columns:62px 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">GPU kernel optimization study hub</p>
+      <h1>CUDA Mock Assessment</h1>
+    </div>
+    <nav aria-label="Site navigation">
+      <a href="index.html">Hub</a>
+      <a href="gpu-kernel-skills.html">Skills &amp; MCQ</a>
+      <a href="coding-practice.html">Coding</a>
+      <a href="coding-practice.html#reasoning">Reasoning Atlas</a>
+      <a href="#briefing">Briefing</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="section intro">
+      <p class="status warning">Unofficial original practice</p>
+      <h2>Practice the work, not leaked questions</h2>
+      <div class="notice">
+        <strong>Practice simulation based on public CUDA/GPU engineering topics.</strong>
+        It is not an official, copied, or verified Mercor assessment format. The 90-minute mode is a training target, not a claimed Mercor time limit or scoring cutoff.
+      </div>
+      <p>
+        The tasks exercise the public role signals: review unfamiliar GPU kernels, reason from profiler evidence,
+        modify CUDA/C++17 code, preserve correctness, and clearly explain when a metric does or does not support a conclusion.
+        Use this trainer before the real assessment. During an official assessment, follow its current rules; do not use AI or outside help unless explicitly permitted.
+      </p>
+
+      <figure class="study-figure" aria-labelledby="assessment-flow-caption">
+        <figcaption id="assessment-flow-caption">Assessment reasoning loop</figcaption>
+        <p class="sr-only">A four-step flow from reading the contract, through correctness and evidence, to a justified decision.</p>
+        <div class="flow-row">
+          <div class="flow-step"><strong>1. Contract</strong><span>Extract shapes, tails, numeric tolerance, ownership, and timing scope.</span></div>
+          <div class="flow-arrow" aria-hidden="true"></div>
+          <div class="flow-step"><strong>2. Correctness</strong><span>Find races, divergent barriers, out-of-bounds accesses, and missing dependencies.</span></div>
+          <div class="flow-arrow" aria-hidden="true"></div>
+          <div class="flow-step"><strong>3. Evidence</strong><span>Classify the bottleneck with counters, source code, and a falsification experiment.</span></div>
+          <div class="flow-arrow" aria-hidden="true"></div>
+          <div class="flow-step accent"><strong>4. Decision</strong><span>Make one controlled change, re-test, and communicate the tradeoff.</span></div>
+        </div>
+      </figure>
+    </section>
+
+    <section id="briefing" class="section">
+      <h2>Candidate briefing</h2>
+      <div class="brief-grid">
+        <article class="brief-card"><span class="status good">Scope</span><h3>Six production-style tasks</h3><p>Profiler triage, kernel debugging, implementation, fusion, streams, and measurement rigor.</p></article>
+        <article class="brief-card"><span class="status good">Score</span><h3>100 trainer points</h3><p>Point-by-point self-evaluation appears only after final submission. Critical CUDA failures cap affected tasks.</p></article>
+        <article class="brief-card"><span class="status warning">Attempt</span><h3>Submit once, then retake</h3><p>Answers autosave locally. Submission freezes the current attempt; an explicit retake starts over.</p></article>
+        <article class="brief-card"><span class="status good">Tools</span><h3>Honor-system simulation</h3><p>For pressure practice, close notes and AI tools. This static page cannot securely hide its embedded evaluator data.</p></article>
+      </div>
+
+      <div id="setup-panel" class="course">
+        <h3>Choose a practice mode</h3>
+        <fieldset class="mode-picker">
+          <legend>Timing</legend>
+          <label class="mode-option">
+            <input type="radio" name="practice-mode" value="timed" checked>
+            <span><strong>90-minute pressure practice</strong><span>Uses a reload-safe wall-clock deadline and submits automatically when it expires.</span></span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="practice-mode" value="untimed">
+            <span><strong>Untimed realistic form</strong><span>Preserves the one-submission flow without inventing an official time constraint.</span></span>
+          </label>
+        </fieldset>
+        <p><strong>Before starting:</strong> use a modern browser; write compilable CUDA where requested; state assumptions; prioritize safety and correctness before speed.</p>
+        <button id="start-attempt" class="action" type="button">Start attempt</button>
+      </div>
+      <p id="storage-warning" class="storage-warning" role="alert" hidden>Browser storage is unavailable. This attempt will work in memory, but reloading can lose it.</p>
+
+      <div class="table-wrap" aria-label="Mock assessment task blueprint">
+        <table>
+          <thead><tr><th>Task</th><th>Suggested time</th><th>Points</th><th>Deliverable</th></tr></thead>
+          <tbody>
+            <tr><td>1. Profiler triage</td><td>10 min</td><td>12</td><td>Diagnosis, first change, validation metrics, falsification experiment</td></tr>
+            <tr><td>2. Debug a reduction</td><td>15 min</td><td>18</td><td>Corrected kernel/launch contract and explanation</td></tr>
+            <tr><td>3. Ragged stable softmax</td><td>30 min</td><td>32</td><td>CUDA kernel plus launch and test reasoning</td></tr>
+            <tr><td>4. Fusion regression</td><td>12 min</td><td>14</td><td>Evidence-based regression analysis and next experiment</td></tr>
+            <tr><td>5. Streams and timing</td><td>13 min</td><td>14</td><td>Correct asynchronous schedule and timing method</td></tr>
+            <tr><td>6. Speedup defense</td><td>10 min</td><td>10</td><td>At most 200 words defining a defensible protocol</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="assessment-shell" class="section" hidden>
+      <div class="assessment-bar" aria-label="Attempt status">
+        <div class="status-cell"><span>Time</span><time id="timer-value">Not started</time></div>
+        <div class="status-cell"><span>Answered</span><strong id="progress-value">0 / 6</strong></div>
+        <div class="status-cell"><span>For review</span><strong id="review-value">0</strong></div>
+        <div class="status-cell"><span>Autosave</span><strong id="save-value" role="status" aria-live="polite">Ready</strong></div>
+        <button id="review-submit" class="action" type="button">Review submission</button>
+      </div>
+
+      <div id="candidate-view">
+        <form id="candidate-form" novalidate>
+          <article class="mock-task" id="task-1" data-task-id="t1" data-points="12" data-minutes="10">
+            <div class="task-head"><div><p class="eyebrow">Task 1 · Profiler judgment</p><h3>Triage inefficient memory access</h3></div><div class="task-meta"><span class="pill">10 min</span><span class="pill">12 points</span></div></div>
+            <div class="prompt-block">
+              <p>A single FP32 gather kernel takes 2.40 ms on a fixed large input. Nsight Compute reports:</p>
+              <div class="table-wrap">
+                <table class="metric-table">
+                  <thead><tr><th>Signal</th><th>Observed</th><th>Interpretation constraint</th></tr></thead>
+                  <tbody>
+                    <tr><td>DRAM throughput</td><td>38% of peak</td><td>Not near the device bandwidth ceiling</td></tr>
+                    <tr><td>L2 hit rate</td><td>81%</td><td>A high hit rate alone does not mean accesses are efficient</td></tr>
+                    <tr><td>L1/TEX sectors / request</td><td>15.2</td><td>Ideal is 4 for 32 active lanes loading one aligned FP32 value each</td></tr>
+                    <tr><td>Long scoreboard stalls</td><td>54% of issue stalls</td><td>Consistent with waiting on data, but not proof of root cause</td></tr>
+                    <tr><td>Achieved occupancy</td><td>61%</td><td>Reasonable; raising it is not automatically useful</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <figure class="study-figure" aria-labelledby="profiler-snapshot-caption">
+              <figcaption id="profiler-snapshot-caption">Profiler snapshot — percentages; sector bar scaled to the 32-sector worst case</figcaption>
+              <p class="sr-only">Horizontal bars show 38 percent DRAM throughput, 81 percent L2 hit rate, sectors per request at 3.8 times the aligned FP32 ideal, 54 percent long scoreboard stalls, and 61 percent achieved occupancy.</p>
+              <div class="metric-scale">
+                <div class="metric-row"><span>DRAM throughput</span><div class="metric-track"><div class="metric-fill" style="width:38%"></div></div><span class="metric-value">38%</span></div>
+                <div class="metric-row"><span>L2 hit rate</span><div class="metric-track"><div class="metric-fill" style="width:81%"></div></div><span class="metric-value">81%</span></div>
+                <div class="metric-row"><span>Sectors / request</span><div class="metric-track"><div class="metric-fill warn" style="width:47.5%"></div></div><span class="metric-value">15.2 / 32</span></div>
+                <div class="metric-row"><span>Long scoreboard</span><div class="metric-track"><div class="metric-fill warn" style="width:54%"></div></div><span class="metric-value">54%</span></div>
+                <div class="metric-row"><span>Occupancy</span><div class="metric-track"><div class="metric-fill" style="width:61%"></div></div><span class="metric-value">61%</span></div>
+              </div>
+            </figure>
+            <div class="acceptance"><p><strong>Deliverable:</strong> classify the leading bottleneck hypothesis; identify the first source/index-layout change you would test; name the before/after metrics and correctness checks; give one experiment that could falsify your hypothesis; explain why L2 hit rate and occupancy alone do not justify the change.</p></div>
+            <label class="task-label" for="answer-t1">Candidate response</label>
+            <textarea class="task-answer" id="answer-t1" data-answer="t1" spellcheck="true" placeholder="State the evidence, hypothesis, controlled change, validation, and falsification condition."></textarea>
+            <div class="review-row"><label><input type="checkbox" data-review="t1"> Mark task 1 for review</label><a class="remediation-link" href="gpu-kernel-skills.html#prof">Use after submission: profiler decision guide</a></div>
+          </article>
+
+          <article class="mock-task" id="task-2" data-task-id="t2" data-points="18" data-minutes="15">
+            <div class="task-head"><div><p class="eyebrow">Task 2 · Correctness review</p><h3>Debug an unfamiliar reduction</h3></div><div class="task-meta"><span class="pill">15 min</span><span class="pill">18 points</span></div></div>
+            <div class="prompt-block">
+              <p>The caller expects one scalar sum for any <code>n &gt;= 0</code>. It launches multiple blocks and initializes <code>*out = 0</code>.</p>
+              <pre class="code">__global__ void reduce_bad(const float* x, float* out, int n) {
+  extern __shared__ float s[];
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i &gt;= n) return;
+  s[threadIdx.x] = x[i];
+  __syncthreads();
+
+  for (int stride = blockDim.x / 2; stride &gt; 0; stride &gt;&gt;= 1) {
+    if (threadIdx.x &lt; stride) s[threadIdx.x] += s[threadIdx.x + stride];
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) *out = s[0];
+}</pre>
+            </div>
+            <div class="acceptance"><p><strong>Deliverable:</strong> provide a safe correction and launch/host contract. Cover partial blocks, arbitrary positive <code>n</code>, cross-block combination, <code>n = 0</code>, output initialization/ownership, and the synchronization rule violated by the original. You may use an atomic final combine or a second reduction pass—state the numerical and performance tradeoff.</p></div>
+            <label class="task-label" for="answer-t2">Corrected CUDA and explanation</label>
+            <textarea class="task-answer code-answer" id="answer-t2" data-answer="t2" spellcheck="false" placeholder="Write the corrected kernel and host/launch behavior, then explain the defects."></textarea>
+            <div class="review-row"><label><input type="checkbox" data-review="t2"> Mark task 2 for review</label><span><a class="remediation-link" href="coding-practice.html#q3">Reduction pattern</a> · <a class="remediation-link" href="coding-practice.html#q11">debugging drill</a></span></div>
+          </article>
+
+          <article class="mock-task" id="task-3" data-task-id="t3" data-points="32" data-minutes="30">
+            <div class="task-head"><div><p class="eyebrow">Task 3 · Kernel implementation</p><h3>Implement ragged stable softmax</h3></div><div class="task-meta"><span class="pill">30 min</span><span class="pill">32 points</span></div></div>
+            <div class="prompt-block">
+              <pre class="code">__global__ void ragged_softmax(
+    const float* x, float* y,
+    const int* lengths, int rows, int stride);</pre>
+              <p>Use exactly one 256-thread block per row. Upstream validation guarantees <code>rows &gt;= 0</code>, <code>1 &lt;= stride &lt;= 4096</code>, <code>0 &lt;= lengths[r] &lt;= stride</code>, and finite FP32 inputs in each valid prefix. For every row, write stable softmax over <code>[0, length)</code> and write zero to all padding. An empty row is all zeros; a zero-row workload is a host-side no-op.</p>
+            </div>
+            <div class="acceptance"><p><strong>Acceptance criteria:</strong> safe for lengths <code>{0,1,31,32,255,256,257,4096}</code>; handles arbitrary tails without divergent barriers; subtracts a block-wide maximum; uses valid cross-warp/block reduction; writes every padded element; emits finite nonnegative results; matches a double-precision CPU reference with each nonempty row sum within <code>2e-5</code>. Include launch and error-checking notes.</p></div>
+            <label class="task-label" for="answer-t3">CUDA implementation and brief test rationale</label>
+            <textarea class="task-answer code-answer" id="answer-t3" data-answer="t3" spellcheck="false" placeholder="Implement the kernel, helper reduction(s), launch, and concise validation notes."></textarea>
+            <div class="review-row"><label><input type="checkbox" data-review="t3"> Mark task 3 for review</label><a class="remediation-link" href="coding-practice.html#q9">Use after submission: softmax pattern</a></div>
+          </article>
+
+          <article class="mock-task" id="task-4" data-task-id="t4" data-points="14" data-minutes="12">
+            <div class="task-head"><div><p class="eyebrow">Task 4 · Optimization tradeoff</p><h3>Explain a fusion regression</h3></div><div class="task-meta"><span class="pill">12 min</span><span class="pill">14 points</span></div></div>
+            <div class="prompt-block">
+              <p>Two individually optimized kernels were fused. Correctness is unchanged on the tested shapes, but the representative steady-state result regressed:</p>
+              <div class="table-wrap"><table class="metric-table"><thead><tr><th>Signal</th><th>Before fusion</th><th>After fusion</th></tr></thead><tbody><tr><td>End-to-end GPU time</td><td>1.35 ms</td><td>1.88 ms</td></tr><tr><td>Registers / thread</td><td>52</td><td>148</td></tr><tr><td>Theoretical occupancy</td><td>62.5%</td><td>18.75%</td></tr><tr><td>Local memory traffic</td><td>0 B</td><td>96 B / thread</td></tr><tr><td>Removed intermediate traffic</td><td>0</td><td>640 MB</td></tr></tbody></table></div>
+            </div>
+            <figure class="study-figure" aria-labelledby="fusion-bars-caption">
+              <figcaption id="fusion-bars-caption">Fusion tradeoff — normalized before and after</figcaption>
+              <p class="sr-only">A comparison chart shows runtime, registers, and local memory increasing after fusion while occupancy decreases.</p>
+              <div class="compare-bars">
+                <span></span><span class="head">Before</span><span class="head">After</span>
+                <span class="compare-label">Runtime</span><div class="compare-cell"><i style="width:72%"></i><b>1.35 ms</b></div><div class="compare-cell after"><i style="width:100%"></i><b>1.88 ms</b></div>
+                <span class="compare-label">Registers</span><div class="compare-cell"><i style="width:35%"></i><b>52</b></div><div class="compare-cell after"><i style="width:100%"></i><b>148</b></div>
+                <span class="compare-label">Occupancy</span><div class="compare-cell"><i style="width:100%"></i><b>62.5%</b></div><div class="compare-cell after"><i style="width:30%"></i><b>18.75%</b></div>
+                <span class="compare-label">Local traffic</span><div class="compare-cell"><i style="width:0"></i><b>0 B</b></div><div class="compare-cell after"><i style="width:100%"></i><b>96 B/thread</b></div>
+              </div>
+            </figure>
+            <div class="acceptance"><p><strong>Deliverable:</strong> explain the likely causal chain without claiming that occupancy alone caused the regression. Propose the next controlled experiment, the source-level evidence and counters you would inspect, and at least two possible remedies. State when partial fusion or keeping both kernels is the correct engineering decision.</p></div>
+            <label class="task-label" for="answer-t4">Regression analysis</label>
+            <textarea class="task-answer" id="answer-t4" data-answer="t4" spellcheck="true" placeholder="Connect the evidence, qualify uncertainty, and define the next experiment."></textarea>
+            <div class="review-row"><label><input type="checkbox" data-review="t4"> Mark task 4 for review</label><a class="remediation-link" href="gpu-kernel-skills.html#opt">Use after submission: optimization playbook</a></div>
+          </article>
+
+          <article class="mock-task" id="task-5" data-task-id="t5" data-points="14" data-minutes="13">
+            <div class="task-head"><div><p class="eyebrow">Task 5 · Host orchestration</p><h3>Repair streams, dependencies, and timing</h3></div><div class="task-meta"><span class="pill">13 min</span><span class="pill">14 points</span></div></div>
+            <div class="prompt-block">
+              <p>A loop intended to overlap work uses two streams created with <code>cudaStreamNonBlocking</code> but a single device buffer. The host input/output came from <code>malloc</code>, so the program cannot rely on true transfer overlap. It nevertheless treats every call as asynchronous: each iteration issues <code>cudaMemcpyAsync(H2D)</code>, a kernel, and <code>cudaMemcpyAsync(D2H)</code>, alternating streams. The next stream overwrites the same device buffer without waiting, and the CPU reads output without an explicit completion check. Start/stop events are recorded on the default stream around the loop.</p>
+            </div>
+            <figure class="study-figure" aria-labelledby="broken-stream-caption">
+              <figcaption id="broken-stream-caption">Broken two-stream schedule</figcaption>
+              <p class="sr-only">A two-lane timeline shows stream one copying, computing, and returning data while stream two overwrites the same buffer and the CPU reads too early. Default-stream events do not join both lanes.</p>
+              <div class="stream-diagram">
+                <div class="stream-lane"><span class="stream-label">Stream 1</span><span class="stream-step">H2D buf0</span><span class="stream-step">kernel buf0</span><span class="stream-step">D2H buf0</span><span class="stream-step empty">—</span><span class="stream-step empty">—</span></div>
+                <div class="stream-lane"><span class="stream-label">Stream 2</span><span class="stream-step empty">—</span><span class="stream-step warn">H2D buf0</span><span class="stream-step warn">kernel buf0</span><span class="stream-step">D2H buf0</span><span class="stream-step empty">—</span></div>
+                <div class="stream-lane"><span class="stream-label">Host</span><span class="stream-step">start event?</span><span class="stream-step warn">read output</span><span class="stream-step empty">—</span><span class="stream-step empty">—</span><span class="stream-step">stop event?</span></div>
+              </div>
+            </figure>
+            <div class="acceptance"><p><strong>Deliverable:</strong> sketch corrected host pseudocode. Address pinned memory, buffer ownership or explicit cross-stream events, host buffer lifetime, completion before CPU consumption, event placement that actually joins all non-blocking streams, warm-up, and error checking. The repair must remain correct after pageable buffers are replaced with pinned storage; do not depend on implementation-specific staging or blocking for ordering. Explain what can overlap and what must remain ordered.</p></div>
+            <label class="task-label" for="answer-t5">Corrected schedule and explanation</label>
+            <textarea class="task-answer code-answer" id="answer-t5" data-answer="t5" spellcheck="false" placeholder="Show buffer/stream ownership, events or joins, valid timing, and CPU consumption."></textarea>
+            <div class="review-row"><label><input type="checkbox" data-review="t5"> Mark task 5 for review</label><a class="remediation-link" href="coding-practice.html#q12">Use after submission: stream pipeline</a></div>
+          </article>
+
+          <article class="mock-task" id="task-6" data-task-id="t6" data-points="10" data-minutes="10">
+            <div class="task-head"><div><p class="eyebrow">Task 6 · Performance communication</p><h3>Defend—or reject—a 4.1× speedup claim</h3></div><div class="task-meta"><span class="pill">10 min</span><span class="pill">10 points</span></div></div>
+            <div class="prompt-block"><p>A teammate reports “4.1× faster.” The baseline is a debug build; the candidate is optimized with <code>-O3</code>. The baseline ran once after cold allocation, the candidate ran once after three warm-ups. Inputs differ but have the same element count. There is no CPU reference, synchronization is implicit, clocks/architecture are unreported, and only the fastest timing was kept.</p></div>
+            <div class="acceptance"><p><strong>Deliverable (maximum 200 words):</strong> decide whether the claim is currently defensible. Define a minimal correctness oracle and fair benchmark protocol, including equivalent builds/work, representative shapes and edge cases, warm-up/cache policy, correct GPU timing, repeated samples and reported statistic, environment disclosure, and profiler evidence that would explain—not merely decorate—the result.</p></div>
+            <label class="task-label" for="answer-t6">Decision memo</label>
+            <textarea class="task-answer" id="answer-t6" data-answer="t6" spellcheck="true" placeholder="Write a concise decision memo (200 words maximum)."></textarea>
+            <div class="review-row"><label><input type="checkbox" data-review="t6"> Mark task 6 for review</label><span><strong id="word-count-t6">0 / 200 words</strong> · <a class="remediation-link" href="gpu-kernel-skills.html#prof">Use after submission: measurement guidance</a></span></div>
+          </article>
+        </form>
+
+        <div class="actions"><button id="review-submit-bottom" class="action" type="button">Review submission</button></div>
+        <div id="submit-panel" class="inline-panel" role="dialog" aria-labelledby="submit-heading" hidden>
+          <h3 id="submit-heading">Submit this attempt?</h3>
+          <p id="submit-summary">Review the summary before locking your answers.</p>
+          <p>Submission freezes every candidate field and unlocks the self-evaluation rubric. The current attempt cannot be edited afterward.</p>
+          <div class="button-row"><button id="submit-final" class="action danger" type="button">Submit final</button><button id="cancel-submit" class="action secondary" type="button">Keep working</button></div>
+        </div>
+      </div>
+
+      <section id="evaluator-view" aria-labelledby="evaluator-heading" hidden>
+        <p class="status good">Attempt submitted</p>
+        <h2 id="evaluator-heading">Evaluator mode</h2>
+        <p id="attempt-summary" class="section-note">Score the evidence actually present in the response. Do not award points for an unstated intention.</p>
+        <div class="notice"><strong>Trainer rubric only.</strong> These weights, safety caps, and readiness bands are practice aids—not Mercor criteria or pass thresholds.</div>
+        <div class="score-grid" aria-live="polite">
+          <article class="score-card"><span class="status good">Current score</span><p><strong id="score-value" class="score-number">0 / 100</strong></p></article>
+          <article class="score-card"><span class="status good">Readiness signal</span><h3 id="score-band">Not yet scored</h3><p>A useful training target is 80+ with no active safety cap; it is not an official cutoff.</p></article>
+          <article class="score-card"><span class="status warning">Critical caps</span><h3 id="cap-summary">None selected</h3><p>Safety failures limit affected task credit even when the prose is polished.</p></article>
+        </div>
+        <div id="evaluator-tasks"></div>
+        <div class="button-row"><button id="export-attempt" class="action secondary" type="button">Export attempt JSON</button><button id="retake-attempt" class="action" type="button">Start a fresh retake</button></div>
+        <div id="reset-panel" class="inline-panel" role="dialog" aria-labelledby="reset-heading" hidden>
+          <h3 id="reset-heading">Erase this local attempt?</h3>
+          <p>Export first if you want to keep the responses or scoring notes. Retaking clears answers, flags, rubric selections, and timestamps.</p>
+          <div class="button-row"><button id="confirm-reset" class="action danger" type="button">Erase and retake</button><button id="cancel-reset" class="action secondary" type="button">Cancel</button></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="section">
+      <h2>Why these tasks are here</h2>
+      <p class="section-note">The simulation was derived from public role and candidate guidance, then grounded in NVIDIA’s current technical documentation. No private assessment material was used.</p>
+      <div class="link-list">
+        <a href="https://work.mercor.com/jobs/list_AAABnonIKKQ9b5g5FzJHvZMH/cuda-engineering-expert" target="_blank" rel="noopener">Mercor CUDA Engineering Expert role</a>
+        <a href="https://talent.docs.mercor.com/how-to/assessments" target="_blank" rel="noopener">Mercor assessment guidance</a>
+        <a href="https://talent.docs.mercor.com/policies/llm-usage" target="_blank" rel="noopener">Mercor LLM usage policy</a>
+        <a href="https://www.mercor.com/experts/software-engineers/" target="_blank" rel="noopener">Mercor software engineering expert work</a>
+        <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html" target="_blank" rel="noopener">CUDA Best Practices Guide</a>
+        <a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html" target="_blank" rel="noopener">Nsight Compute Profiling Guide</a>
+      </div>
+    </section>
+  </main>
+
+  <footer><p>Unofficial CUDA assessment trainer. Original questions for private practice; last updated 2026-07-13.</p></footer>
+  <script src="./theme-toggle.js"></script>
+  <script src="./mock-assessment.js"></script>
+</body>
+</html>
