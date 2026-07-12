@@ -18,6 +18,8 @@
       <a href="#documents">Documents</a>
       <a href="gpu-kernel-skills.html">Skills &amp; MCQ</a>
       <a href="coding-practice.html">Coding Practice</a>
+      <a href="coding-practice.html#reasoning">Reasoning Atlas</a>
+      <a href="mock-assessment.html">Mock Assessment</a>
     </nav>
   </header>
 
@@ -31,6 +33,8 @@
           L2 cache hit rate, L2 throughput, occupancy, and warp-stall reasons, deciding what they mean, and
           knowing when a metric is <em>not</em> useful. The material pairs definitions and core-concept notes
           with a bank of multiple-choice practice questions and explanations.
+          The final mock adds a one-submission candidate flow and evidence-based self-evaluation so you can rehearse
+          the unfamiliar-kernel work under pressure before taking the real assessment.
         </p>
       </div>
 
@@ -68,7 +72,17 @@
         <article class="mini-card">
           <span class="status warning">Practice format</span>
           <h3>MCQ Drills</h3>
-          <p>96 questions in four formats — single answer, select-all-that-apply, arrange-in-order chains, and fill-in-the-blank code/command completions — many built around embedded profiler dumps and kernel code, with explanations, per-section scores, and reshuffling retry. Works offline.</p>
+          <p>116 questions in four formats — single answer, select-all-that-apply, arrange-in-order chains, and fill-in-the-blank code/command completions — many built around embedded profiler dumps and kernel code, with sourced production scenarios, explanations, per-section scores, and reshuffling retry. Works offline.</p>
+        </article>
+        <article class="mini-card">
+          <span class="status warning">Assessment rehearsal</span>
+          <h3>Six-Task Mock</h3>
+          <p>An original, unofficial 100-point simulation with timed or untimed modes, autosave, final-submission lock, CUDA safety caps, evaluator rubrics, remediation links, and retake support.</p>
+        </article>
+        <article class="mini-card">
+          <span class="status good">Reasoning</span>
+          <h3>CUDA Thinking Atlas</h3>
+          <p>Visible flowcharts for constructing an answer, assigning data ownership, selecting synchronization scope, tracing block-wide sequences, debugging unfamiliar kernels, and turning profiler counters into falsifiable claims.</p>
         </article>
       </div>
     </section>
@@ -82,18 +96,23 @@
       <div class="doc-grid">
         <a class="doc-link featured" href="gpu-kernel-skills.html">
           <strong>GPU Kernel Optimization Revision and MCQ Practice</strong>
-          <span>Definitions, core-concept cards, ASCII diagrams, a profiler-metric decision guide, further-reading links, and 96 practice questions (single-answer, multi-select, ordering chains, fill-in-the-blank code completions, and profiler-report case studies) across seven sections.</span>
+          <span>Definitions, core-concept cards, responsive reasoning diagrams, a profiler-metric decision guide, further-reading links, and 116 practice questions (single-answer, multi-select, ordering chains, fill-in-the-blank code completions, and sourced production case studies) across seven sections.</span>
         </a>
         <a class="doc-link featured" href="coding-practice.html">
-          <strong>Coding Interview Practice — 12 Kernels with Solutions</strong>
-          <span>The kernel-writing questions interview reports cite most: reduction, transpose/rotation, tiled matmul, histogram, scan, stencil, softmax, GEMV, a find-the-bugs round, and a stream-pipeline host round — each with a complete solution and interviewer discussion.</span>
+          <strong>Coding Interview Practice — 16 Kernels with Solutions</strong>
+          <span>A visible CUDA reasoning atlas plus classic interview kernels and realistic production workloads: reduction, transpose, matmul, histogram, scan, stencil, softmax, sparse SpMV, stable compaction, RMSNorm, quantization, debugging, and stream orchestration — each with a complete solution and interviewer discussion.</span>
+        </a>
+        <a class="doc-link featured" href="mock-assessment.html">
+          <strong>Unofficial CUDA Mock Assessment — 6 Tasks, 100 Points</strong>
+          <span>Rehearse the role’s public work signals: profiler triage, unfamiliar-kernel debugging, stable softmax, fusion regressions, streams, and defensible benchmarking. Candidate answers stay locked until submission, then a weighted evaluator rubric and targeted remediation unlock.</span>
         </a>
       </div>
     </section>
   </main>
 
   <footer>
-    <p>Last updated: 2026-07-07. Styles shared with the Isaac Sim study hub.</p>
+    <p>Last updated: 2026-07-13. Unofficial study material for Mercor-focused CUDA/GPU kernel optimization preparation.</p>
   </footer>
+  <script src="./theme-toggle.js"></script>
 </body>
 </html>

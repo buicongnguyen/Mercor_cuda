@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Hands-on CUDA coding interview practice: 12 kernel-writing problems with complete solutions and interviewer discussion — reduction, transpose, matmul, histogram, scan, softmax, debugging, and stream pipelines.">
+  <meta name="description" content="Hands-on CUDA coding interview practice: 16 kernel-writing problems with complete solutions and interviewer discussion — classic patterns plus compaction, sparse workloads, normalization, quantization, debugging, and stream pipelines.">
   <title>GPU Kernel Coding Interview Practice</title>
   <link rel="stylesheet" href="styles.css">
   <style>
@@ -17,6 +17,8 @@
     .tag.hard { background:var(--warn-soft); color:var(--warn); border:1px solid var(--warn); }
     .tests { margin:2px 0 10px; color:var(--muted); font-size:14px; }
     .tests strong { color:var(--accent-strong); }
+    .accept { margin:10px 0 0; padding:8px 11px; border-left:3px solid var(--accent); border-radius:0 6px 6px 0; background:var(--accent-soft); color:var(--muted); font-size:13px; }
+    .accept strong { color:var(--accent-strong); }
     .code { margin:10px 0 0; padding:13px 15px; overflow-x:auto; background:var(--bg); border:1px solid var(--line); border-radius:6px; font-family:Consolas,Menlo,monospace; font-size:13px; line-height:1.5; color:var(--text); }
     details.sol { margin-top:12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); }
     details.sol summary { padding:10px 14px; cursor:pointer; font-weight:700; color:var(--accent-strong); }
@@ -27,21 +29,41 @@
     .sol-body li { margin-bottom:7px; color:var(--muted); }
     .sol-body li strong { color:var(--text); }
     .groupnote { color:var(--muted); }
+    .decision-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; }
+    .decision-card { min-width:0; padding:11px 12px; border:1px solid var(--line); border-radius:7px; background:var(--panel); }
+    .decision-card.question { border-color:var(--accent); background:var(--accent-soft); }
+    .decision-card.warn { border-color:var(--warn); background:var(--warn-soft); }
+    .decision-card strong,.decision-card code { display:block; margin-bottom:4px; }
+    .decision-card span { color:var(--muted); font-size:12px; }
+    .sequence-map { display:grid; gap:8px; }
+    .sequence-lane { display:grid; grid-template-columns:105px repeat(5,minmax(0,1fr)); gap:6px; align-items:stretch; }
+    .sequence-label { display:flex; align-items:center; color:var(--muted); font-size:12px; font-weight:700; }
+    .sequence-event { display:flex; min-width:0; min-height:52px; align-items:center; justify-content:center; padding:7px; border:1px solid var(--line); border-radius:6px; background:var(--panel); font-size:11px; font-weight:700; text-align:center; }
+    .sequence-event.active { border-color:var(--accent); background:var(--accent-soft); }
+    .sequence-event.guard { border-color:var(--warn); background:var(--warn-soft); }
+    @media (max-width:760px) {
+      .sequence-lane { grid-template-columns:1fr; }
+      .sequence-label { padding-top:8px; border-top:1px solid var(--line); }
+      .sequence-event { min-height:42px; }
+    }
   </style>
 </head>
 <body>
   <header class="topbar">
     <div>
       <p class="eyebrow">GPU kernel optimization study hub</p>
-      <h1>Coding Interview Practice — 12 Kernels with Solutions</h1>
+      <h1>Coding Interview Practice — 16 Kernels with Solutions</h1>
     </div>
     <nav aria-label="Site navigation">
       <a href="index.html">Hub</a>
       <a href="gpu-kernel-skills.html">Skills &amp; MCQ</a>
+      <a href="mock-assessment.html">Mock Assessment</a>
+      <a href="#reasoning">Reasoning</a>
       <a href="#warm">Warm-ups</a>
       <a href="#core">Core patterns</a>
       <a href="#hard">Harder</a>
       <a href="#debug">Debug &amp; host</a>
+      <a href="#production">Production</a>
     </nav>
   </header>
 
@@ -53,10 +75,82 @@
         write a working kernel on a whiteboard or shared editor, then defend its <em>performance</em> — coalescing,
         shared-memory use, synchronization, and how you'd verify and profile it. The recurring set is remarkably
         stable: reduction, transpose/rotation, tiled matmul, histogram, scan, stencil, softmax, a debugging
-        exercise, and host-side transfer pipelining. Each problem below states the task, what the interviewer is
+        exercise, and host-side transfer pipelining. The production set adds stable compaction, sparse/ragged
+        work, fused normalization, and dynamic quantization. Each problem below states the task, what the interviewer is
         actually testing, and a complete solution with the discussion points that separate a pass from a strong pass.
         Write your attempt before opening the solution.
       </p>
+      <p class="accept"><strong>Interview contract:</strong> state launch and input assumptions, write a CPU reference, test empty/tiny/tail shapes plus adversarial values, run Compute Sanitizer, and benchmark only after correctness passes. Empty work is a host-side no-op (or explicit identity); never issue a zero-grid launch.</p>
+    </section>
+
+    <section id="reasoning" class="section">
+      <h2>CUDA reasoning atlas — think before you type</h2>
+      <p class="groupnote">Use these diagrams on every unfamiliar kernel. They separate proof from performance and turn an interview answer into a sequence of defensible decisions.</p>
+
+      <figure class="study-figure" aria-labelledby="answer-flow-caption">
+        <figcaption id="answer-flow-caption">Flow of thinking — construct a correct, defensible CUDA answer</figcaption>
+        <p class="sr-only">A three-level workflow: extract the contract and ownership, prove bounds and synchronization, then measure and defend one controlled optimization.</p>
+        <div class="flow-level">
+          <span class="flow-level-label">Understand the contract</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step"><strong>Shape + edge cases</strong><span><code>n=0</code>, tails, strides, precision</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step"><strong>Choose the work unit</strong><span>thread, warp, block, cluster, or grid</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step accent"><strong>Assign ownership</strong><span>who reads, writes, and owns each output?</span></div>
+          </div>
+        </div>
+        <div class="flow-level">
+          <span class="flow-level-label">Prove correctness before optimizing</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step"><strong>Trace one warp</strong><span>indices, branches, lane addresses</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step warn"><strong>Prove happens-before</strong><span>every producer → consumer → overwrite edge</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step"><strong>Test the contract</strong><span>CPU oracle, canaries, sanitizer, adversarial values</span></div>
+          </div>
+        </div>
+        <div class="flow-level">
+          <span class="flow-level-label">Build a performance claim</span>
+          <div class="flow-row" aria-hidden="true">
+            <div class="flow-step"><strong>Measure baseline</strong><span>correct timing and representative shapes</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step"><strong>State one hypothesis</strong><span>metric + source line + predicted change</span></div>
+            <span class="flow-arrow"></span>
+            <div class="flow-step accent"><strong>Change → re-prove → re-measure</strong><span>keep only a reproducible end-to-end win</span></div>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="study-figure" aria-labelledby="sync-decision-caption">
+        <figcaption id="sync-decision-caption">Logic decision — choose synchronization from the dependency scope</figcaption>
+        <p class="sr-only">First identify a producer-consumer dependency, its memory location, and all participating threads. Then select the narrowest primitive that provides both required ordering and participation.</p>
+        <div class="decision-grid">
+          <div class="decision-card question"><strong>1 · Is data shared?</strong><span>No: keep it in one lane's registers; no rendezvous. Yes: identify every producer and consumer.</span></div>
+          <div class="decision-card"><strong>Warp register exchange</strong><span>Use a correctly masked shuffle. It converges named lanes for the exchange but is not a shared-memory fence.</span></div>
+          <div class="decision-card"><strong>Warp shared memory</strong><span>Use <code>__syncwarp(mask)</code>; every named lane must participate with the same mask.</span></div>
+          <div class="decision-card"><strong>Whole block</strong><span>Use <code>__syncthreads()</code> only on a path uniform across the block.</span></div>
+          <div class="decision-card"><strong>Cluster or grid</strong><span>Use <code>cluster.sync()</code>, cooperative <code>grid.sync()</code>, or a kernel boundary with the required launch contract.</span></div>
+          <div class="decision-card warn"><strong>Streams or host</strong><span>Use events, stream waits, or an explicit synchronize. A fence alone is not a rendezvous.</span></div>
+        </div>
+      </figure>
+
+      <figure class="study-figure" aria-labelledby="collective-sequence-caption">
+        <figcaption id="collective-sequence-caption">Sequence diagram — one safe block-wide collective</figcaption>
+        <p class="sr-only">All threads perform guarded loads, rendezvous, cooperate on shared state with uniform barriers, then one elected thread publishes the block result.</p>
+        <div class="sequence-map" aria-hidden="true">
+          <div class="sequence-lane"><span class="sequence-label">All threads</span><span class="sequence-event active">guarded load or identity</span><span class="sequence-event guard">barrier A</span><span class="sequence-event active">reduce assigned pair</span><span class="sequence-event guard">uniform barriers</span><span class="sequence-event">leave collective</span></div>
+          <div class="sequence-lane"><span class="sequence-label">Shared memory</span><span class="sequence-event">partial writes arriving</span><span class="sequence-event active">tile/partials visible</span><span class="sequence-event">read old stride, write new</span><span class="sequence-event active">one block partial stable</span><span class="sequence-event">safe to reuse</span></div>
+          <div class="sequence-lane"><span class="sequence-label">Elected lane</span><span class="sequence-event">participates normally</span><span class="sequence-event">waits with block</span><span class="sequence-event">participates in reduction</span><span class="sequence-event">observes final value</span><span class="sequence-event active">publish exactly once</span></div>
+        </div>
+        <p class="figure-note">Never return only the tail lanes before barrier A. Load an identity instead so participation stays uniform.</p>
+      </figure>
+
+      <div class="link-list">
+        <a href="https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/cpp-language-extensions.html" target="_blank" rel="noopener">CUDA synchronization and warp intrinsics</a>
+        <a href="https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html" target="_blank" rel="noopener">Compute Sanitizer tools</a>
+        <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html" target="_blank" rel="noopener">CUDA Best Practices: APOD and verification</a>
+      </div>
     </section>
 
     <!-- ================= WARM-UPS ================= -->
@@ -68,6 +162,7 @@
         <div class="prob-head"><h3>1. SAXPY (vector add) — the screener</h3><span class="tag warm">Warm-up</span></div>
         <p class="tests"><strong>Tests:</strong> thread indexing, bounds guard, grid-stride idiom, launch configuration.</p>
         <p>Write a kernel computing <code>y[i] = a·x[i] + y[i]</code> for <code>n</code> floats, correct for any <code>n</code>, plus the host-side launch. Then: how do you pick the grid size?</p>
+        <p class="accept"><strong>Acceptance tests:</strong> <code>n ∈ {0,1,31,32,255,256,257,1M}</code>; mixed-sign and large/small values; CPU-FMA comparison with tolerance; allocation canaries remain unchanged.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__global__ void saxpy(int n, float a, const float* __restrict__ x,
                       float* __restrict__ y) {
@@ -79,11 +174,13 @@
 
 // host
 int block = 256;
-int grid  = std::min((n + block - 1) / block,      // round UP, never n/block
-                     32 * numSMs);                 // cap: a few waves is enough
-saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
+if (n &gt; 0) {                                       // a zero-block launch is invalid
+    int grid = std::min((n + block - 1) / block,   // round UP, never n/block
+                        32 * numSMs);               // cap: a few waves is enough
+    saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);
+}</pre>
           <ul>
-            <li><strong>The two classic fails:</strong> <code>n / block</code> (drops the tail unless n divides evenly) and no guard at all (out-of-bounds writes). The grid-stride loop handles both and works for any launch shape.</li>
+            <li><strong>The classic fails:</strong> <code>n / block</code> drops the tail, no guard writes out of bounds, and launching a zero-sized grid for <code>n=0</code> is invalid. The host treats empty input as a no-op; the grid-stride loop handles every nonempty tail.</li>
             <li><strong>Grid size answer:</strong> enough blocks to fill every SM a few times over (e.g. 32 × SM count); more than that adds nothing for a memory-bound kernel. Mentioning the cap shows you know launches aren't "one thread per element or bust".</li>
             <li><strong>Performance framing:</strong> SAXPY is 2 FLOPs per 12 bytes — hopelessly memory-bound, so the only meaningful metric is achieved bandwidth vs peak. Saying this unprompted is a strong-pass signal.</li>
           </ul>
@@ -93,22 +190,27 @@ saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
       <article class="prob" id="q2">
         <div class="prob-head"><h3>2. AoS → SoA conversion</h3><span class="tag warm">Warm-up</span></div>
         <p class="tests"><strong>Tests:</strong> whether you actually understand coalescing, not just recite it.</p>
-        <p>Given <code>struct P { float x, y, z, w; }</code> stored as an array of <code>n</code> structs, write a kernel that produces four separate arrays <code>X, Y, Z, W</code>. Which direction of this kernel is coalesced, and does it matter here?</p>
+        <p>Given <code>struct alignas(16) P { float x, y, z, w; }</code> stored as an array of <code>n</code> structs, write a kernel that produces four separate arrays <code>X, Y, Z, W</code>. Which direction of this kernel is coalesced, and does it matter here?</p>
+        <p class="accept"><strong>Acceptance tests:</strong> <code>n ∈ {0,1,31,32,33}</code> with distinct bit patterns per field; exact output comparison; require <code>sizeof(P)==16</code> and 16-byte source alignment, then inspect generated code for the intended vector load.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
-<pre class="code">__global__ void aos_to_soa(const float4* __restrict__ in,   // P as float4
+<pre class="code">struct alignas(16) P { float x, y, z, w; };
+static_assert(sizeof(P) == 16);
+
+__global__ void aos_to_soa(const P* __restrict__ in,
                            float* __restrict__ X, float* __restrict__ Y,
                            float* __restrict__ Z, float* __restrict__ W,
                            int n) {
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i &lt; n;
          i += gridDim.x * blockDim.x) {
-        float4 p = in[i];        // ONE 16-byte vector load — fully coalesced
+        P p = in[i];             // eligible for one aligned 16-byte load;
+                                 // confirm LDG.128 (or equivalent) in SASS
         X[i] = p.x;  Y[i] = p.y; // four coalesced 4-byte stores
         Z[i] = p.z;  W[i] = p.w;
     }
 }</pre>
           <ul>
-            <li><strong>The insight being probed:</strong> reading the struct as a <code>float4</code> makes the "bad" AoS side coalesced too — a warp reads 32 consecutive 16-byte vectors = 512 contiguous bytes. Loading field-by-field through a <code>const P*</code> would stride 16 bytes per lane per field and waste 3/4 of each sector.</li>
-            <li><strong>Requirement to state:</strong> the struct is 16 bytes and the pointer 16-byte aligned, so the <code>float4</code> reinterpret is legal.</li>
+            <li><strong>The insight being probed:</strong> an aligned whole-record load lets a warp request 32 consecutive 16-byte records = 512 contiguous bytes. Loading field-by-field can instead issue four stride-16 instructions with poor sector utilization, so inspect SASS rather than assuming the compiler vectorized it.</li>
+            <li><strong>Requirement to state:</strong> the stored type itself is the 16-byte-aligned <code>P</code>. Alignment alone does not make reinterpreting an unrelated <code>P*</code> as <code>float4*</code> legal under C++ aliasing rules.</li>
             <li><strong>Bigger picture:</strong> this kernel is worth running once if many later kernels each use one field; if only one kernel reads the data, fuse the conversion into it instead — a data-layout decision, not a kernel decision.</li>
           </ul>
         </div></details>
@@ -124,6 +226,7 @@ saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
         <div class="prob-head"><h3>3. Parallel sum reduction</h3><span class="tag core">Most asked</span></div>
         <p class="tests"><strong>Tests:</strong> tree reduction, __syncthreads discipline, warp shuffles, cross-block combination.</p>
         <p>Sum <code>n</code> floats into a single value. Start with a working version, then the interviewer will push: fewer barriers? less shared memory? how do blocks combine?</p>
+        <p class="accept"><strong>Acceptance tests:</strong> launch exactly 256 threads; host handles <code>n=0</code> as the additive identity; test <code>{1,31,32,255,256,257,1M}</code>, zeros and alternating magnitudes; initialize the output; compare with abs/rel tolerance across repeated runs.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__global__ void reduce_sum(const float* __restrict__ in, float* out, int n) {
     __shared__ float s[256];                       // = blockDim.x
@@ -148,7 +251,31 @@ saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
         if (threadIdx.x == 0) atomicAdd(out, v);   // 4) one atomic per block
     }
 }
-// host: cudaMemset(out, 0, 4) before launch!</pre>
+// host: cudaMemset(out, 0, 4); for n==0 stop there, otherwise launch
+//       with exactly 256 threads per block.</pre>
+          <figure class="study-figure" aria-labelledby="reduction-dataflow-caption">
+            <figcaption id="reduction-dataflow-caption">Reduction data flow — use the cheapest scope that can still combine the values</figcaption>
+            <p class="sr-only">Inputs flow through per-thread registers, a block shared-memory tree, warp register shuffles, and finally either one atomic per block or deterministic partials for a second kernel.</p>
+            <div class="flow-row" aria-hidden="true">
+              <div class="flow-step"><strong>Grid-stride inputs</strong><span>many elements per thread</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step accent"><strong>Register <code>v</code></strong><span>thread-local sum · no synchronization</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step warn"><strong>Shared tree</strong><span>256 → 64 · uniform block barriers</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step accent"><strong>Warp shuffle</strong><span>32 → 1 · register exchange</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step"><strong>Block partial</strong><span>one value per block</span></div>
+            </div>
+            <div class="flow-level">
+              <span class="flow-level-label">Final combine decision</span>
+              <div class="decision-grid" aria-hidden="true">
+                <div class="decision-card question"><strong>Need deterministic/reproducible order?</strong><span>The product contract decides—not the kernel author's preference.</span></div>
+                <div class="decision-card"><strong>Yes → partials + second kernel</strong><span>Controlled tree order; extra launch and temporary storage.</span></div>
+                <div class="decision-card"><strong>No → one <code>atomicAdd</code> / block</strong><span>Simple and often fast; low bits may vary with arrival order.</span></div>
+              </div>
+            </div>
+          </figure>
           <ul>
             <li><strong>The layered structure is the answer:</strong> registers (free) → shared tree (cheap) → shuffles (barrier-free) → one atomic per block (expensive, done once). Each layer uses the cheapest mechanism that still works.</li>
             <li><strong>Follow-up "why stride halving downward?":</strong> active threads stay contiguous (0..stride), so whole warps retire; the naive interleaved version (<code>tid % (2*stride) == 0</code>) diverges every warp.</li>
@@ -162,6 +289,7 @@ saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
         <div class="prob-head"><h3>4. Matrix transpose (and its twin: rotate an image 90°)</h3><span class="tag core">Core</span></div>
         <p class="tests"><strong>Tests:</strong> the read-xor-write coalescing dilemma, shared-memory staging, bank-conflict padding.</p>
         <p>Transpose an <code>n×n</code> float matrix. The naive version is trivially correct — why is it slow, and how do you fix it? (The reported NVIDIA "rotate an image 90°" question is this plus one index flip.)</p>
+        <p class="accept"><strong>Acceptance tests:</strong> launch <code>dim3(32,32)</code>; <code>n ∈ {0,1,31,32,33,63,64,65}</code>; unique coordinate-encoded values; transpose twice and compare bitwise; canaries and sanitizer catch edge-tile writes.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__global__ void transpose(const float* __restrict__ in,
                           float* __restrict__ out, int n) {
@@ -192,6 +320,7 @@ saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
         <div class="prob-head"><h3>5. Histogram (256 bins)</h3><span class="tag core">Core</span></div>
         <p class="tests"><strong>Tests:</strong> atomics, contention reasoning, the privatization pattern.</p>
         <p>Count byte-value frequencies over <code>n</code> bytes into 256 bins. The one-line atomicAdd version works — why does it crawl on skewed data, and what's the standard fix?</p>
+        <p class="accept"><strong>Acceptance tests:</strong> <code>n ∈ {0,1,255,256,257,1M}</code>; all-one-bin, uniform, and random distributions; zero bins before launch; require exact bins and <code>Σbins == n</code>.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__global__ void hist256(const unsigned char* __restrict__ data, size_t n,
                         unsigned int* __restrict__ bins) {
@@ -220,6 +349,7 @@ saxpy&lt;&lt;&lt;grid, block&gt;&gt;&gt;(n, a, d_x, d_y);</pre>
         <div class="prob-head"><h3>6. Tiled matrix multiply</h3><span class="tag core">Core</span></div>
         <p class="tests"><strong>Tests:</strong> the data-reuse argument (arithmetic intensity), double-barrier discipline, boundary handling.</p>
         <p>Write C = A×B for <code>N×N</code> floats using shared-memory tiles, correct for N not a multiple of the tile size. Be ready for: "why is this faster than the naive version — with numbers?"</p>
+        <p class="accept"><strong>Acceptance tests:</strong> for <code>T ∈ {16,32}</code>, require <code>T²</code> within the device block limit and launch <code>block=(T,T)</code> only when <code>N&gt;0</code>; test <code>N ∈ {0,1,T−1,T,T+1,2T+1}</code> with zero, identity, and random matrices; compare to an FP64 CPU reference and run sanitizer on partial tiles.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">template &lt;int T&gt;                                    // T = 16 or 32
 __global__ void sgemm(const float* __restrict__ A, const float* __restrict__ B,
@@ -241,7 +371,28 @@ __global__ void sgemm(const float* __restrict__ A, const float* __restrict__ B,
         __syncthreads();                            // done reading before reload
     }
     if (row &lt; N &amp;&amp; col &lt; N) C[row * N + col] = acc;
-}</pre>
+}
+// host: if (N &gt; 0), require T*T &lt;= maxThreadsPerBlock and launch
+// dim3 block(T,T), grid((N+T-1)/T, (N+T-1)/T); otherwise no launch.</pre>
+          <figure class="study-figure" aria-labelledby="matmul-state-caption">
+            <figcaption id="matmul-state-caption">Tile-loop state machine — both barriers protect a different ownership transition</figcaption>
+            <p class="sr-only">Each tile moves from guarded loading to ready, consuming, reusable, and either the next tile or final output. The first barrier prevents reading a half-loaded tile; the second prevents overwriting data still being consumed.</p>
+            <div class="flow-row" aria-hidden="true">
+              <div class="flow-step"><strong>Filling tile</strong><span>guarded A/B loads · out of bounds becomes zero</span></div>
+              <span class="flow-arrow"><small>barrier 1</small></span>
+              <div class="flow-step accent"><strong>Tile ready</strong><span>all writes visible to the block</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step"><strong>Consuming</strong><span><code>T</code> FMAs reuse shared values</span></div>
+              <span class="flow-arrow"><small>barrier 2</small></span>
+              <div class="flow-step warn"><strong>Reusable</strong><span>all readers finished; next tile may overwrite</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step"><strong>Advance or store</strong><span>more <code>k0</code>? loop · otherwise guarded C write</span></div>
+            </div>
+            <div class="decision-grid">
+              <div class="decision-card warn"><strong>Missing barrier 1</strong><span>Read-after-write hazard: some warps compute from a half-loaded tile.</span></div>
+              <div class="decision-card warn"><strong>Missing barrier 2</strong><span>Write-after-read hazard: a fast warp reloads storage while a slow warp still consumes it.</span></div>
+            </div>
+          </figure>
           <ul>
             <li><strong>The numbers they want:</strong> naive matmul loads each A/B element N times from DRAM (~0.25 FLOP/byte — memory-bound). Tiling loads each element once per tile: T× fewer bytes, arithmetic intensity ~T/4 FLOP/byte — at T=32 the kernel crosses to compute-bound.</li>
             <li><strong>Both barriers are load-bearing:</strong> the first prevents computing on a half-loaded tile, the second prevents a fast warp from overwriting a tile others still read. Removing the second is the classic intermittent-corruption bug.</li>
@@ -255,6 +406,7 @@ __global__ void sgemm(const float* __restrict__ A, const float* __restrict__ B,
         <div class="prob-head"><h3>7. 1-D convolution / stencil with halo</h3><span class="tag core">Core</span></div>
         <p class="tests"><strong>Tests:</strong> halo loading, constant memory, boundary handling — the pattern behind all stencil codes.</p>
         <p>Apply a 7-tap filter (radius 3) to <code>n</code> floats: <code>out[i] = Σ w[k]·in[i+k]</code>, k ∈ [−3, 3], zero beyond the edges. Use shared memory so each input is read from global memory once per block.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> launch exactly 256 threads; <code>n ∈ {0,1,2,3,255,256,257}</code>; impulse and all-ones inputs; asymmetric weights expose flipped indexing; compare both boundaries and interior against a CPU reference.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__constant__ float c_w[7];                          // broadcast-friendly
 
@@ -300,6 +452,7 @@ __global__ void conv1d_r3(const float* __restrict__ in,
         <div class="prob-head"><h3>8. Block-wide inclusive prefix sum (scan)</h3><span class="tag hard">Hard</span></div>
         <p class="tests"><strong>Tests:</strong> shuffle-based warp scan, hierarchical composition (warp → block → grid).</p>
         <p>Compute the inclusive prefix sum of one block's worth of data (e.g. 1024 floats) using warp shuffles. Then explain how you'd extend it to arbitrary <code>n</code>.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> launch a warp-multiple block of at most 1024 threads; test valid counts <code>{1,31,32,33,1023,1024}</code>, all ones and mixed signs; compare every prefix, not only the final total.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__global__ void block_scan_inclusive(const float* __restrict__ in,
                                      float* __restrict__ out, int n) {
@@ -331,6 +484,32 @@ __global__ void conv1d_r3(const float* __restrict__ in,
     if (warp &gt; 0) v += warp_sums[warp - 1];
     if (g &lt; n) out[g] = v;
 }</pre>
+          <figure class="study-figure" aria-labelledby="scan-flow-caption">
+            <figcaption id="scan-flow-caption">Hierarchical scan — the same composition at warp, block, and grid scope</figcaption>
+            <p class="sr-only">Within a block, each warp scans locally, lane 31 publishes the warp total, warp zero scans those totals after a barrier, and every warp adds the preceding warp prefix after another barrier. A device-wide scan repeats the shape across blocks.</p>
+            <div class="flow-level">
+              <span class="flow-level-label">Inside one block</span>
+              <div class="flow-row" aria-hidden="true">
+                <div class="flow-step"><strong>Warp-local scan</strong><span>shuffle-up across 32 lanes</span></div>
+                <span class="flow-arrow"><small>lane 31</small></span>
+                <div class="flow-step"><strong>Publish warp totals</strong><span>one value per warp</span></div>
+                <span class="flow-arrow"><small>block barrier</small></span>
+                <div class="flow-step accent"><strong>Warp 0 scans totals</strong><span>prefix for every warp</span></div>
+                <span class="flow-arrow"><small>block barrier</small></span>
+                <div class="flow-step"><strong>Uniform add</strong><span>add preceding-warp prefix</span></div>
+              </div>
+            </div>
+            <div class="flow-level">
+              <span class="flow-level-label">Extend to the whole grid</span>
+              <div class="flow-row" aria-hidden="true">
+                <div class="flow-step"><strong>Scan each block</strong><span>emit one block sum</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step accent"><strong>Scan block sums</strong><span>small second kernel</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step"><strong>Uniform add</strong><span>offset every block</span></div>
+              </div>
+            </div>
+          </figure>
           <ul>
             <li><strong>The composition is the answer:</strong> scan within warps (no barriers, shuffles), scan the warp totals, add the prefix back. The same three-level shape extends to the grid: per-block sums → scan of block sums (tiny second kernel) → uniform add third kernel. Or a decoupled-lookback single pass, which is what CUB does — name it.</li>
             <li><strong>Why <code>__shfl_up_sync</code>:</strong> lane i needs the value from lane i−off; the <code>lane &gt;= off</code> guard keeps low lanes' values unchanged, which is exactly Hillis-Steele.</li>
@@ -343,6 +522,7 @@ __global__ void conv1d_r3(const float* __restrict__ in,
         <div class="prob-head"><h3>9. Row-wise numerically stable softmax</h3><span class="tag hard">Hard — AI-lab favorite</span></div>
         <p class="tests"><strong>Tests:</strong> numerical stability, multi-phase block cooperation, barrier-and-broadcast discipline.</p>
         <p>For a <code>rows × cols</code> matrix, compute softmax along each row: <code>y = exp(x − max(x)) / Σexp(x − max(x))</code>. One block per row. Why the max subtraction, and where are the sync hazards?</p>
+        <p class="accept"><strong>Acceptance tests:</strong> <code>cols ∈ {1,31,32,255,256,257,1024}</code>; constant rows and logits near ±1000; outputs are finite/nonnegative, each row sums near 1, and matches a stable FP64 reference.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__global__ void softmax_rows(const float* __restrict__ X,
                              float* __restrict__ Y, int cols) {
@@ -380,10 +560,22 @@ __global__ void conv1d_r3(const float* __restrict__ in,
     for (int i = threadIdx.x; i &lt; cols; i += blockDim.x) y[i] *= inv;
 }
 // launch: softmax_rows&lt;&lt;&lt;rows, 256, 256 * sizeof(float)&gt;&gt;&gt;(X, Y, cols);</pre>
+          <figure class="study-figure" aria-labelledby="softmax-flow-caption">
+            <figcaption id="softmax-flow-caption">Stable softmax — three cooperative phases sharing one scratch buffer</figcaption>
+            <p class="sr-only">The block first reads the row and reduces its maximum. After broadcasting the maximum and synchronizing before scratch reuse, it rereads the row, computes exponentials, writes them, and reduces their sum. After the final reduction barrier it normalizes the stored values.</p>
+            <div class="flow-row" aria-hidden="true">
+              <div class="flow-step accent"><strong>1 · Reduce max</strong><span>read <code>x</code> → shared max <code>m</code></span></div>
+              <span class="flow-arrow"><small>broadcast m · barrier before scratch reuse</small></span>
+              <div class="flow-step warn"><strong>2 · Exponentiate + sum</strong><span>read <code>x</code> again · write <code>y</code> · reduce Σ</span></div>
+              <span class="flow-arrow"><small>final reduction barrier · broadcast 1/Σ</small></span>
+              <div class="flow-step accent"><strong>3 · Normalize</strong><span>reread and rewrite <code>y</code></span></div>
+            </div>
+            <p class="figure-note">Global traffic per element: <code>x</code> read twice; <code>y</code> written, reread, and rewritten.</p>
+          </figure>
           <ul>
             <li><strong>Why subtract the max:</strong> exp(1000) overflows to inf and the row becomes NaN; exp(x − max) ≤ 1 always. The result is mathematically identical — this is THE canonical numerical-stability question.</li>
             <li><strong>The subtle barrier:</strong> the <code>__syncthreads()</code> after <code>m = s[0]</code> — without it a fast thread starts phase 2 and overwrites <code>s[0]</code> while slow threads are still reading the max. Interviewers plant exactly this hazard.</li>
-            <li><strong>Traffic accounting:</strong> stashing exp in <code>y</code> makes it 2 reads + 2 writes per element; fusing with a following op or keeping rows in registers/shared (when cols is small) is the optimization discussion. Online softmax (single-pass max+sum, the FlashAttention trick) is the strong-pass name-drop.</li>
+            <li><strong>Traffic accounting:</strong> this implementation reads <code>x</code> once for max and again for exp, then writes and rereads <code>y</code> for normalization: 3 global reads + 2 writes per element. Fusing with a following op or keeping a small row in registers/shared reduces that traffic. Online softmax (the FlashAttention building block) combines running max and sum without materializing the score matrix.</li>
           </ul>
         </div></details>
       </article>
@@ -392,6 +584,7 @@ __global__ void conv1d_r3(const float* __restrict__ in,
         <div class="prob-head"><h3>10. Matrix–vector multiply, one warp per row</h3><span class="tag hard">Hard</span></div>
         <p class="tests"><strong>Tests:</strong> choosing the work-to-thread mapping, warp-level reduction, coalescing within a row.</p>
         <p>Compute <code>y = A·x</code> for an <code>N×M</code> matrix. One thread per row is the obvious mapping — why is it wrong, and what's better?</p>
+        <p class="accept"><strong>Acceptance tests:</strong> launch 256-thread blocks only when <code>N&gt;0</code>; <code>N ∈ {0,1,7,8,9}</code>, <code>M ∈ {0,1,31,32,33,1025}</code>; zero and random matrices; FP64 dot-product reference with tolerance; canaries cover the final partial warp.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">__global__ void gemv_warp_per_row(const float* __restrict__ A,
                                   const float* __restrict__ x,
@@ -399,6 +592,10 @@ __global__ void conv1d_r3(const float* __restrict__ in,
     int row  = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
     int lane = threadIdx.x &amp; 31;
     if (row &gt;= N) return;                 // whole warp exits together
+    if (M == 0) {                          // avoid arithmetic on a null A
+        if (lane == 0) y[row] = 0.f;
+        return;                            // uniform for the whole row warp
+    }
     const float* a = A + (size_t)row * M;
     float acc = 0.f;
     for (int j = lane; j &lt; M; j += 32)    // lanes read CONSECUTIVE floats
@@ -407,7 +604,8 @@ __global__ void conv1d_r3(const float* __restrict__ in,
         acc += __shfl_down_sync(0xffffffff, acc, off);
     if (lane == 0) y[row] = acc;
 }
-// launch: 256-thread blocks -&gt; 8 rows per block, grid = ceil(N / 8)</pre>
+// host: if (N &gt; 0), launch 256-thread blocks -&gt; 8 rows/block,
+//       grid = ceil(N / 8); otherwise there is no output work.</pre>
           <ul>
             <li><strong>Why one thread per row fails:</strong> thread i would read <code>A[i*M + j]</code> — warp-neighbor threads are M floats apart, fully strided access, ~32× the traffic. The mapping, not the math, is the whole question.</li>
             <li><strong>Warp-per-row fixes it:</strong> lanes stride through one row together, consecutive addresses, coalesced; the dot product finishes with a shuffle tree. For very wide rows use a block per row; for many short rows, a thread per row with A stored column-major. "It depends on M — here's the crossover reasoning" is the senior answer.</li>
@@ -425,7 +623,8 @@ __global__ void conv1d_r3(const float* __restrict__ in,
       <article class="prob" id="q11">
         <div class="prob-head"><h3>11. Find the three bugs</h3><span class="tag hard">Debug round</span></div>
         <p class="tests"><strong>Tests:</strong> race detection, boundary reasoning — reviewing code you didn't write, exactly like the job.</p>
-        <p>This kernel should compute a 3-point moving average: <code>out[i] = (in[i−1] + in[i] + in[i+1]) / 3</code> with clamped edges. It compiles, runs, and is wrong three different ways. Find all three.</p>
+        <p>This kernel should compute a 3-point moving average with clamped edges and is launched with exactly 256 threads per block: <code>out[i] = (in[i−1] + in[i] + in[i+1]) / 3</code>. It compiles, runs, and is wrong three different ways. Find all three.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> <code>n ∈ {0,1,255,256,257,511,512}</code> with coordinate-encoded values; exact edge semantics; memcheck and racecheck both clean over repeated launches.</p>
 <pre class="code">__global__ void smooth(const float* in, float* out, int n) {   // BUGGY
     __shared__ float s[256];
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -433,6 +632,30 @@ __global__ void conv1d_r3(const float* __restrict__ in,
     if (threadIdx.x &gt; 0 &amp;&amp; threadIdx.x &lt; blockDim.x - 1)
         out[i] = (s[threadIdx.x - 1] + s[threadIdx.x] + s[threadIdx.x + 1]) / 3.f;
 }</pre>
+        <figure class="study-figure" aria-labelledby="kernel-review-caption">
+          <figcaption id="kernel-review-caption">Logic sweep — review unfamiliar CUDA without guessing the bug</figcaption>
+          <p class="sr-only">Review every memory access for bounds, every shared read for a producer and happens-before edge, every barrier for uniform participation, every output for exactly one writer, and finally compare semantics with the stated contract.</p>
+          <div class="flow-level">
+            <span class="flow-level-label">Sweep the code in this order</span>
+            <div class="flow-row" aria-hidden="true">
+              <div class="flow-step"><strong>1 · Bounds</strong><span>every load/store valid for tails and empty work?</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step warn"><strong>2 · Shared edges</strong><span>producer exists and becomes visible before read?</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step"><strong>3 · Barriers</strong><span>all block threads reach every block rendezvous?</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step"><strong>4 · Writers</strong><span>each required output written exactly once?</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step accent"><strong>5 · Semantics</strong><span>edge policy, precision, and ownership match contract?</span></div>
+            </div>
+          </div>
+          <div class="decision-grid">
+            <div class="decision-card"><strong>Memory address failure</strong><span>Start with <code>compute-sanitizer --tool memcheck</code>.</span></div>
+            <div class="decision-card"><strong>Shared read/write ordering</strong><span>After memcheck is clean, use <code>--tool racecheck</code>.</span></div>
+            <div class="decision-card"><strong>Barrier or mask participation</strong><span>Use <code>--tool synccheck</code>.</span></div>
+            <div class="decision-card question"><strong>Tool passes ≠ correct algorithm</strong><span>Compare every edge shape with the independent CPU reference.</span></div>
+          </div>
+        </figure>
         <details class="sol"><summary>Show the three bugs &amp; the fixed kernel</summary><div class="sol-body">
           <ul>
             <li><strong>Bug 1 — out-of-bounds read:</strong> <code>in[i]</code> has no <code>i &lt; n</code> guard; the last block reads (and the compute line writes) past the array.</li>
@@ -442,19 +665,22 @@ __global__ void conv1d_r3(const float* __restrict__ in,
 <pre class="code">__global__ void smooth_fixed(const float* __restrict__ in,
                              float* __restrict__ out, int n) {
     __shared__ float s[256 + 2];                    // + halo cells
+    if (n == 0) return;                             // uniform block-wide exit
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int c = threadIdx.x + 1;
-    s[c] = (i &lt; n) ? in[i] : 0.f;                             // bug 1 fixed
+    // Invalid lanes in a partial block load the clamped endpoint. The lane
+    // after i==n-1 then supplies the right neighbor with no overlapping writer.
+    s[c] = in[min(i, n - 1)];                                  // bug 1 fixed
     if (threadIdx.x == 0)                // left/right halo, edge-clamped
         s[0]   = (i &gt; 0)                 ? in[i - 1]              : in[0];
-    if (threadIdx.x == blockDim.x - 1 || i == n - 1)
-        s[c+1] = (i + 1 &lt; n)             ? in[i + 1]              : in[n - 1];
+    if (threadIdx.x == blockDim.x - 1)
+        s[c+1] = in[min(i + 1, n - 1)];
     __syncthreads();                                          // bug 2 fixed
     if (i &lt; n)                                                // bug 3 fixed:
         out[i] = (s[c - 1] + s[c] + s[c + 1]) / 3.f;          // all threads write
 }</pre>
           <ul>
-            <li><strong>Interview meta:</strong> narrate a systematic sweep — bounds first, then every shared write→read edge needs a barrier, then "does every output element have exactly one writer?" That checklist finds all three without luck. Mention <code>compute-sanitizer</code> (racecheck) as the tool that catches bugs 1–2 mechanically.</li>
+            <li><strong>Interview meta:</strong> narrate a systematic sweep — bounds first, then every shared write→read edge needs a barrier, then "does every output element have exactly one writer?" That checklist finds all three without luck. Use Compute Sanitizer <code>memcheck</code> for the out-of-bounds access and <code>racecheck</code> for the shared-memory hazard.</li>
           </ul>
         </div></details>
       </article>
@@ -463,12 +689,13 @@ __global__ void conv1d_r3(const float* __restrict__ in,
         <div class="prob-head"><h3>12. Host-side: pipeline 8 batches with streams</h3><span class="tag hard">Host round</span></div>
         <p class="tests"><strong>Tests:</strong> pinned memory, stream semantics, double-buffered device memory, correct timing.</p>
         <p>You must process 8 independent batches: upload → kernel → download each. Write host code that overlaps transfers with compute, and time the whole pipeline correctly.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> compare all 8 outputs with a serial pipeline; use tiny and tail-sized batches; verify event timing against a synchronized CPU timer; nsys must show only hardware-supported overlap and no buffer reuse race.</p>
         <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
 <pre class="code">const int  NB = 8;
 const size_t bytes = BATCH * sizeof(float);
 
 float *h_in, *h_out;
-cudaMallocHost(&amp;h_in,  NB * bytes);      // PINNED — or async is a lie
+cudaMallocHost(&amp;h_in,  NB * bytes);      // pinned for reliable async overlap
 cudaMallocHost(&amp;h_out, NB * bytes);
 
 float *d_in[2], *d_out[2];               // double-buffered device memory:
@@ -479,9 +706,15 @@ for (int i = 0; i &lt; 2; ++i) {            // stream k uses buffer k % 2
 cudaStream_t st[2];
 cudaStreamCreate(&amp;st[0]); cudaStreamCreate(&amp;st[1]);
 
-cudaEvent_t t0, t1;
+cudaStream_t timing;
+cudaStreamCreateWithFlags(&amp;timing, cudaStreamNonBlocking);
+cudaEvent_t t0, t1, done[2];
 cudaEventCreate(&amp;t0); cudaEventCreate(&amp;t1);
-cudaEventRecord(t0);                      // timing brackets the PIPELINE
+cudaEventCreateWithFlags(&amp;done[0], cudaEventDisableTiming);
+cudaEventCreateWithFlags(&amp;done[1], cudaEventDisableTiming);
+cudaEventRecord(t0, timing);
+cudaStreamWaitEvent(st[0], t0);           // common start, explicit in every mode
+cudaStreamWaitEvent(st[1], t0);
 
 for (int b = 0; b &lt; NB; ++b) {
     int k = b &amp; 1;                        // alternate stream + buffers
@@ -491,14 +724,254 @@ for (int b = 0; b &lt; NB; ++b) {
     cudaMemcpyAsync(h_out + b * BATCH, d_out[k], bytes,
                     cudaMemcpyDeviceToHost, st[k]);
 }
-cudaEventRecord(t1);
-cudaEventSynchronize(t1);                 // wait for EVERYTHING
+cudaEventRecord(done[0], st[0]);
+cudaEventRecord(done[1], st[1]);
+cudaStreamWaitEvent(timing, done[0]);      // explicitly join both worker streams
+cudaStreamWaitEvent(timing, done[1]);
+cudaEventRecord(t1, timing);
+cudaEventSynchronize(t1);
 float ms; cudaEventElapsedTime(&amp;ms, t0, t1);</pre>
+          <figure class="study-figure" aria-labelledby="stream-flow-caption">
+            <figcaption id="stream-flow-caption">Two ordered worker queues — safe buffer reuse plus an explicit timing join</figcaption>
+            <p class="sr-only">Stream zero processes batch zero then batch two with device buffer zero. Stream one processes batch one then batch three with buffer one. Each batch orders host-to-device copy, kernel, then device-to-host copy. A timing stream records the start, both workers wait for it, then it waits for both worker completion events before recording the stop.</p>
+            <div class="queue-map" aria-hidden="true">
+              <div class="queue-lane">
+                <div class="queue-label">Stream 0<span>device buffer 0</span></div>
+                <div class="queue-track">
+                  <div class="queue-batch"><span class="batch-id">B0</span><span class="queue-stage copy">H2D</span><span class="queue-stage compute">kernel</span><span class="queue-stage copy">D2H</span></div>
+                  <span class="queue-separator">→</span>
+                  <div class="queue-batch"><span class="batch-id">B2</span><span class="queue-stage copy">H2D</span><span class="queue-stage compute">kernel</span><span class="queue-stage copy">D2H</span></div>
+                </div>
+              </div>
+              <div class="queue-lane">
+                <div class="queue-label">Stream 1<span>device buffer 1</span></div>
+                <div class="queue-track">
+                  <div class="queue-batch"><span class="batch-id">B1</span><span class="queue-stage copy">H2D</span><span class="queue-stage compute">kernel</span><span class="queue-stage copy">D2H</span></div>
+                  <span class="queue-separator">→</span>
+                  <div class="queue-batch"><span class="batch-id">B3</span><span class="queue-stage copy">H2D</span><span class="queue-stage compute">kernel</span><span class="queue-stage copy">D2H</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="flow-level">
+              <span class="flow-level-label">Timing stream</span>
+              <div class="flow-row" aria-hidden="true">
+                <div class="flow-step"><strong>record <code>t0</code></strong><span>common start</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step"><strong>workers wait <code>t0</code></strong><span>fan out</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step warn"><strong><code>done0</code> + <code>done1</code></strong><span>join both queues</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step accent"><strong>record <code>t1</code></strong><span>whole pipeline elapsed</span></div>
+              </div>
+            </div>
+            <p class="figure-note">Queues make overlap possible; copy-engine count and the <code>nsys</code> timeline decide what actually overlaps.</p>
+          </figure>
           <ul>
             <li><strong>Why buffer reuse is safe:</strong> batch b+2 reuses batch b's device buffers, but both are queued on the <em>same stream</em>, and streams execute in order — the copy for b+2 cannot start until b's work drained. Cross-batch safety comes free from stream ordering; say this explicitly.</li>
-            <li><strong>The three requirements for overlap:</strong> pinned host memory (else <code>cudaMemcpyAsync</code> silently stages and serializes), distinct streams (same-stream work is ordered), and hardware copy engines (all modern GPUs: at least one per direction).</li>
-            <li><strong>Timing correctness:</strong> events on the default timeline bracket the pipeline; a CPU timer without <code>cudaEventSynchronize</code>/<code>cudaDeviceSynchronize</code> measures launch overhead. This is the same async trap as the fake-4×-speedup case study.</li>
-            <li><strong>Expected speedup:</strong> if copies and compute are comparable, ~2–3× over serial; verify in nsys — the timeline should show copy engine and SMs busy simultaneously. Offering the verification unprompted is the strong-pass move.</li>
+            <li><strong>Requirements for overlap:</strong> use pinned host memory for reliable asynchronous DMA, distinct streams, independent device buffers, and hardware that supports the desired transfer/compute concurrency. Query device capabilities such as <code>asyncEngineCount</code>; do not assume a fixed number of engines.</li>
+            <li><strong>Timing correctness:</strong> the timing stream explicitly waits for completion events from both workers, so this works with legacy and per-thread default-stream semantics and with non-blocking streams. A CPU timer is also valid if it synchronizes both workers before stopping.</li>
+            <li><strong>Expected speedup:</strong> throughput is bounded by the slowest pipeline stage and by actual copy-engine concurrency. Verify in nsys—the timeline should show the intended overlap instead of trusting an idealized 2–3× estimate.</li>
+          </ul>
+        </div></details>
+      </article>
+    </section>
+
+    <!-- ================= PRODUCTION WORKLOADS ================= -->
+    <section id="production" class="section">
+      <h2>Production workloads — modern interview follow-ups</h2>
+      <p class="groupnote">Less toy-like workloads with explicit contracts, awkward shapes, and a library-first production answer.</p>
+
+      <article class="prob" id="q13">
+        <div class="prob-head"><h3>13. Stable stream compaction (<code>copy_if</code>)</h3><span class="tag hard">Data pipeline</span></div>
+        <p class="tests"><strong>Tests:</strong> multi-phase algorithm design, scan, output sizing, and knowing when to use CUB.</p>
+        <p>Given <code>n</code> floats, copy values strictly greater than zero to <code>out</code>, preserve their input order, and return the selected count in device memory. Handle <code>n = 0</code>, arbitrary tails, negative zero, and NaNs (both are not selected). Give the production solution, then sketch the custom algorithm.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> none/all/alternating selected; <code>n ∈ {0,1,31,32,33,1M}</code>; include −0, +0, NaN, and duplicates; require exact count, stable order, and untouched output beyond the count.</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">#include &lt;cub/cub.cuh&gt;
+
+struct IsPositive {
+    __host__ __device__ bool operator()(float x) const { return x &gt; 0.f; }
+};
+
+void compact_positive(const float* d_in, float* d_out, int* d_count,
+                      int n, cudaStream_t stream) {
+    if (n == 0) {
+        cudaMemsetAsync(d_count, 0, sizeof(*d_count), stream);
+        return;
+    }
+    void* d_temp = nullptr;
+    size_t temp_bytes = 0;
+    cub::DeviceSelect::If(d_temp, temp_bytes, d_in, d_out, d_count,
+                          n, IsPositive{}, stream);   // storage query
+    cudaMallocAsync(&amp;d_temp, temp_bytes, stream);
+    cub::DeviceSelect::If(d_temp, temp_bytes, d_in, d_out, d_count,
+                          n, IsPositive{}, stream);   // stable selection
+    cudaFreeAsync(d_temp, stream);                    // ordered after use
+}</pre>
+          <figure class="study-figure" aria-labelledby="compaction-flow-caption">
+            <figcaption id="compaction-flow-caption">Stable compaction — the scan turns winners into ordered destinations</figcaption>
+            <p class="sr-only">For input three, negative one, five, zero, two, the positive predicate is one, zero, one, zero, one. Its exclusive scan is zero, one, one, two, two. Selected values scatter to those indices, producing three, five, two with count three.</p>
+            <div class="flow-row" aria-hidden="true">
+              <div class="flow-step"><strong>Input</strong><code>[3, −1, 5, 0, 2]</code><span>original order</span></div>
+              <span class="flow-arrow"><small><code>x &gt; 0</code></small></span>
+              <div class="flow-step"><strong>Predicate flags</strong><code>[1, 0, 1, 0, 1]</code><span>one flag per item</span></div>
+              <span class="flow-arrow"><small>exclusive scan</small></span>
+              <div class="flow-step warn"><strong>Destination indices</strong><code>[0, 1, 1, 2, 2]</code><span>only winners scatter</span></div>
+              <span class="flow-arrow"></span>
+              <div class="flow-step accent"><strong>Stable output</strong><code>[3, 5, 2]</code><span>count = 3</span></div>
+            </div>
+            <p class="figure-note"><code>count = prefix[n−1] + flag[n−1]</code>. An atomic counter cannot preserve this input order by itself.</p>
+          </figure>
+          <ul>
+            <li><strong>Custom shape:</strong> kernel 1 writes a 0/1 predicate per item; device-wide exclusive scan produces each selected item's stable destination; kernel 2 scatters selected values. The count is <code>prefix[n-1] + flag[n-1]</code>, with a separate <code>n == 0</code> path.</li>
+            <li><strong>Why not one atomic per winner?</strong> a global counter gives a fast unordered compaction but arrival order is not input order. Warp-aggregated reservations reduce atomics when stability is not required.</li>
+            <li><strong>Production judgment:</strong> CUB already handles tails, tuning, and architecture differences. A custom fused version is justified when the predicate is part of a larger pipeline and deleting intermediate flags/traffic matters.</li>
+            <li><strong>Reference:</strong> <a href="https://nvidia.github.io/cccl/unstable/cub/api_docs/device_wide.html" target="_blank" rel="noopener">CUB device-wide primitives</a>.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q14">
+        <div class="prob-head"><h3>14. CSR sparse matrix–vector multiply</h3><span class="tag hard">Sparse / ragged</span></div>
+        <p class="tests"><strong>Tests:</strong> irregular work mapping, gathers, warp reduction, and load-balance judgment.</p>
+        <p>Compute <code>y = A·x</code> where <code>A</code> is CSR: <code>row_offsets[rows+1]</code>, <code>col_indices[nnz]</code>, and <code>values[nnz]</code>. Rows may be empty or highly skewed. Start with one warp per row; explain when it fails and how production code handles the distribution.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> zero-nnz and empty rows, duplicate columns, rows of length <code>{1,31,32,33,10K}</code>, and skewed mixtures; upstream validation rejects invalid offsets/indices before launch; compare to a CPU CSR reference with tolerance.</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">__global__ void csr_spmv_warp(const int* __restrict__ row_offsets,
+                              const int* __restrict__ col_indices,
+                              const float* __restrict__ values,
+                              const float* __restrict__ x,
+                              float* __restrict__ y, int rows) {
+    int thread = blockIdx.x * blockDim.x + threadIdx.x;
+    int row     = thread &gt;&gt; 5;
+    int lane    = threadIdx.x &amp; 31;
+    if (row &gt;= rows) return;                         // whole warp exits
+
+    int begin = row_offsets[row], end = row_offsets[row + 1];
+    float sum = 0.f;
+    for (int j = begin + lane; j &lt; end; j += 32)
+        sum = fmaf(values[j], x[col_indices[j]], sum);
+    for (int off = 16; off &gt; 0; off &gt;&gt;= 1)
+        sum += __shfl_down_sync(0xffffffff, sum, off);
+    if (lane == 0) y[row] = sum;                    // empty row writes 0
+}
+// launch with a multiple-of-32 block size, e.g. 256 threads = 8 rows/block</pre>
+          <figure class="study-figure" aria-labelledby="csr-dataflow-caption">
+            <figcaption id="csr-dataflow-caption">CSR SpMV — regular metadata flow, irregular gather, shape-dependent mapping</figcaption>
+            <p class="sr-only">Row offsets define a range. Warp lanes coalesce values and column-index loads, gather x irregularly, reduce lane accumulators, and lane zero writes y. Row length determines whether a thread, warp, block, or bucketed launch owns a row.</p>
+            <div class="flow-level">
+              <span class="flow-level-label">Data lane</span>
+              <div class="flow-row" aria-hidden="true">
+                <div class="flow-step"><strong><code>row_offsets</code></strong><span>row → <code>[begin,end)</code></span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step accent"><strong><code>values</code> + <code>col_indices</code></strong><span>consecutive lanes load consecutive entries</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step warn"><strong><code>x[col]</code> gather</strong><span>cache behavior follows column locality</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step"><strong>Lane accumulators</strong><span>register FMAs → warp shuffle</span></div>
+                <span class="flow-arrow"></span>
+                <div class="flow-step accent"><strong><code>y[row]</code></strong><span>lane 0 writes; empty row writes 0</span></div>
+              </div>
+            </div>
+            <div class="flow-level">
+              <span class="flow-level-label">Mapping decision from the row-length distribution</span>
+              <div class="decision-grid">
+                <div class="decision-card"><strong>Tiny, regular rows</strong><span>Thread/row or sub-warp mapping may waste fewer lanes.</span></div>
+                <div class="decision-card question"><strong>Medium rows</strong><span>Warp/row gives coalesced CSR loads and cheap register reduction.</span></div>
+                <div class="decision-card"><strong>Very long rows</strong><span>Block/row or partition into chunks with a second combine.</span></div>
+                <div class="decision-card warn"><strong>Highly skewed mixture</strong><span>Bucket by length and launch specialized mappings; benchmark cuSPARSE on the real matrix family.</span></div>
+              </div>
+            </div>
+          </figure>
+          <ul>
+            <li><strong>What coalesces:</strong> lanes traverse consecutive <code>values</code> and <code>col_indices</code>; <code>x[col]</code> is an irregular gather whose cache behavior depends on column locality.</li>
+            <li><strong>Where it breaks down:</strong> one warp wastes lanes on very short rows and leaves a single warp running for extremely long rows. Bucket rows by length, use threads/warp/block per row adaptively, or partition long rows into mergeable chunks.</li>
+            <li><strong>Production answer:</strong> benchmark cuSPARSE across the real matrix family. Validate empty rows, duplicate columns, invalid indices, and tolerance; floating reduction order need not be bitwise identical to a CPU loop.</li>
+            <li><strong>Reference:</strong> <a href="https://docs.nvidia.com/cuda/cusparse/" target="_blank" rel="noopener">cuSPARSE documentation and CSR format</a>.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q15">
+        <div class="prob-head"><h3>15. Fused residual + RMSNorm</h3><span class="tag hard">AI kernel</span></div>
+        <p class="tests"><strong>Tests:</strong> mixed-precision accumulation, fusion, two-phase block cooperation, and tail handling.</p>
+        <p>For each <code>[row, H]</code> finite FP16 vector, compute <code>v = x + residual</code> and <code>y[j] = v[j] · rsqrt(mean(v²) + eps) · gamma[j]</code>. Use finite FP16 <code>gamma</code>, one 256-thread block per row, <code>H&gt;0</code>, and <code>eps&gt;0</code>; require the FP32 reference result to fit finite FP16 (otherwise define saturation or use FP32 output). Accumulate the reduction in FP32 and explain the extra memory pass and how LayerNorm would differ.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> <code>H ∈ {1,31,32,255,256,257,4096}</code>; zero, constant, and large-magnitude finite rows with FP16-representable reference outputs; compare against an FP32 reference, require finite outputs, and verify the residual is added exactly once.</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">#include &lt;cuda_fp16.h&gt;
+
+__global__ void residual_rmsnorm(const half* __restrict__ x,
+                                 const half* __restrict__ residual,
+                                 const half* __restrict__ gamma,
+                                 half* __restrict__ y, int H, float eps) {
+    __shared__ float partial[256];                   // launch exactly 256
+    size_t base = (size_t)blockIdx.x * H;
+    float sumsq = 0.f;
+    for (int j = threadIdx.x; j &lt; H; j += blockDim.x) {
+        float v = __half2float(x[base + j]) + __half2float(residual[base + j]);
+        sumsq = fmaf(v, v, sumsq);
+    }
+    partial[threadIdx.x] = sumsq;
+    __syncthreads();
+    for (int stride = 128; stride &gt; 0; stride &gt;&gt;= 1) {
+        if (threadIdx.x &lt; stride)
+            partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    float inv_rms = rsqrtf(partial[0] / (float)H + eps);
+    for (int j = threadIdx.x; j &lt; H; j += blockDim.x) {
+        float v = __half2float(x[base + j]) + __half2float(residual[base + j]);
+        float g = __half2float(gamma[j]);
+        y[base + j] = __float2half_rn(v * inv_rms * g);
+    }
+}</pre>
+          <ul>
+            <li><strong>Why FP32:</strong> summing FP16 squares over a wide row loses precision or overflows quickly. Inputs/outputs can stay FP16 while reductions and scaling use FP32.</li>
+            <li><strong>Traffic tradeoff:</strong> values are reread after the reduction because arbitrary <code>H</code> may not fit in registers/shared memory. For small fixed H, cache <code>v</code>; for large H, the second coalesced pass is often the right occupancy trade.</li>
+            <li><strong>LayerNorm follow-up:</strong> RMSNorm does not subtract a mean. LayerNorm needs stable mean and variance; parallel Welford/Chan states are stronger than <code>E[x²] − E[x]²</code> for large, nearly equal values.</li>
+            <li><strong>Reference:</strong> <a href="https://docs.nvidia.com/deeplearning/cudnn/latest/operations/operations.html" target="_blank" rel="noopener">cuDNN normalization operations</a>.</li>
+          </ul>
+        </div></details>
+      </article>
+
+      <article class="prob" id="q16">
+        <div class="prob-head"><h3>16. Dynamic per-row INT8 quantization</h3><span class="tag hard">Inference</span></div>
+        <p class="tests"><strong>Tests:</strong> reduction + transform fusion, numerical contracts, rounding, saturation, and degenerate rows.</p>
+        <p>Quantize each finite FP32 row symmetrically to signed INT8 using one 256-thread block per row. Write one FP32 scale per row such that <code>x ≈ q·scale</code>, use the chosen symmetric range <code>[-127, 127]</code>, round to nearest, clamp, and define all-zero rows. Support arbitrary positive <code>cols</code>; reject or sanitize NaN/Inf before this kernel.</p>
+        <p class="accept"><strong>Acceptance tests:</strong> <code>cols ∈ {1,31,32,255,256,257}</code>; all-zero, ±max, and rounding-boundary values; require q in [-127,127], zero-row scale 1, and dequantization error near ≤0.5·scale.</p>
+        <details class="sol"><summary>Show solution &amp; discussion</summary><div class="sol-body">
+<pre class="code">#include &lt;cfloat&gt;
+
+__global__ void quantize_rows_i8(const float* __restrict__ x,
+                                 signed char* __restrict__ q,
+                                 float* __restrict__ scales, int cols) {
+    __shared__ float smax[256];                      // launch exactly 256
+    size_t base = (size_t)blockIdx.x * cols;
+    float m = 0.f;
+    for (int j = threadIdx.x; j &lt; cols; j += blockDim.x)
+        m = fmaxf(m, fabsf(x[base + j]));
+    smax[threadIdx.x] = m;
+    __syncthreads();
+    for (int stride = 128; stride &gt; 0; stride &gt;&gt;= 1) {
+        if (threadIdx.x &lt; stride)
+            smax[threadIdx.x] = fmaxf(smax[threadIdx.x], smax[threadIdx.x + stride]);
+        __syncthreads();
+    }
+    float maxabs = smax[0];
+    // FLT_MIN keeps a nonzero representable scale for subnormal-only rows.
+    float scale = (maxabs &gt; 0.f) ? fmaxf(maxabs / 127.f, FLT_MIN) : 1.f;
+    if (threadIdx.x == 0) scales[blockIdx.x] = scale;
+    for (int j = threadIdx.x; j &lt; cols; j += blockDim.x) {
+        int v = __float2int_rn(x[base + j] / scale); // nearest-even
+        v = max(-127, min(127, v));
+        q[base + j] = (signed char)v;
+    }
+}</pre>
+          <ul>
+            <li><strong>Contract details matter:</strong> signed INT8's full range is [-128,127], while deliberately choosing the symmetric subset [-127,127] makes the scale simple. An all-zero row maps to all zeros with scale 1; flooring a nonzero scale at <code>FLT_MIN</code> keeps subnormal-only rows defined. This kernel's finite-input precondition must be enforced upstream because NaN/Inf do not have a meaningful quantized result.</li>
+            <li><strong>Why two passes:</strong> the scale is unknown until the maximum reduction completes. Cache small rows or reread large rows; vectorized loads/stores need aligned bodies plus scalar tails.</li>
+            <li><strong>Follow-up:</strong> per-row scaling preserves outlier-sensitive rows better than one scale for the whole tensor, while finer per-block scales improve accuracy at the cost of scale storage and more complex consumers. Compare dequantized error, not only kernel time.</li>
+            <li><strong>Reference:</strong> <a href="https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/quantized-types-schemes.html" target="_blank" rel="noopener">TensorRT quantization schemes</a>.</li>
           </ul>
         </div></details>
       </article>
@@ -510,8 +983,9 @@ float ms; cudaEventElapsedTime(&amp;ms, t0, t1);</pre>
       <div class="source-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
         <article class="course"><h3>Interview reports</h3><p>Glassdoor's CUDA interview pages (NVIDIA and others) repeatedly cite reduction, memory hierarchy, synchronization, image rotation, and coalescing questions; prep guides put the coding rounds at LeetCode-medium in CUDA.</p><p><a href="https://www.glassdoor.com/Interview/cuda-interview-questions-SRCH_KO0,4.htm" target="_blank" rel="noopener">Glassdoor CUDA questions</a> | <a href="https://igotanoffer.com/en/advice/nvidia-software-engineer-interview" target="_blank" rel="noopener">NVIDIA interview process</a></p></article>
         <article class="course"><h3>Practice at scale</h3><p>The "100 days of GPU kernels" repo grinds this exact question set daily; Simon Boehm's SGEMM worklog is problem 6 taken to cuBLAS level.</p><p><a href="https://github.com/a-hamdi/GPU" target="_blank" rel="noopener">100 days of GPU kernels</a> | <a href="https://siboehm.com/articles/22/CUDA-MMM" target="_blank" rel="noopener">SGEMM worklog</a></p></article>
-        <article class="course"><h3>Reference solutions</h3><p>CUB/Thrust contain the production versions of problems 3, 5, and 8 — read their docs after solving by hand; the CUDA best-practices guide covers every pattern used here.</p><p><a href="https://github.com/NVIDIA/cccl" target="_blank" rel="noopener">CCCL</a> | <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">Best practices</a></p></article>
-        <article class="course"><h3>Sibling pages</h3><p>The skills page drills the concepts these kernels exercise — profiler metrics, memory hierarchy, and 96 practice questions including principal-level case studies.</p><p><a href="gpu-kernel-skills.html">Skills &amp; MCQ practice</a> | <a href="index.html">Hub</a></p></article>
+        <article class="course"><h3>Reference solutions</h3><p>CUB/Thrust contain the production versions of reductions, scans, histograms, and stable selection; the CUDA best-practices guide covers the measurement and verification workflow.</p><p><a href="https://nvidia.github.io/cccl/unstable/cub/api_docs/device_wide.html" target="_blank" rel="noopener">CUB device-wide API</a> | <a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">Best practices</a></p></article>
+        <article class="course"><h3>Sparse &amp; inference kernels</h3><p>Problems 14–16 mirror library workloads: sparse matrix operations, normalization, and quantization. Use the vendor contracts as the production baseline before justifying custom code.</p><p><a href="https://docs.nvidia.com/cuda/cusparse/" target="_blank" rel="noopener">cuSPARSE</a> | <a href="https://docs.nvidia.com/deeplearning/cudnn/latest/operations/operations.html" target="_blank" rel="noopener">cuDNN operations</a> | <a href="https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/quantized-types-schemes.html" target="_blank" rel="noopener">TensorRT quantization</a></p></article>
+        <article class="course"><h3>Sibling pages</h3><p>The skills page drills the concepts these kernels exercise—profiler metrics, memory hierarchy, and 116 practice questions including sourced production scenarios. The mock assessment combines those concepts and kernels in a submission-and-evaluation flow.</p><p><a href="gpu-kernel-skills.html">Skills &amp; MCQ practice</a> | <a href="mock-assessment.html">Mock assessment</a> | <a href="index.html">Hub</a></p></article>
       </div>
     </section>
   </main>
